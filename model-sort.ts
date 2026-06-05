@@ -264,8 +264,13 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  // Track every model selection (manual, Ctrl+P cycle, session restore)
+  // Track model selections (manual, session restore).
+  // Skip "cycle" events — updating lastUsed during Ctrl+P cycling creates
+  // a feedback loop: each cycle step makes the selected model most-recent,
+  // re-sorts it to position 0, then (currentIndex + 1) % len always hits
+  // position 1 — toggling forever between the top 2.
   pi.on("model_select", async (event, _ctx) => {
+    if (event.source === "cycle") return;
     const key = buildModelKey(event.model.provider, event.model.id);
     lastUsed[key] = Date.now();
     writeConfig({ lastUsed });

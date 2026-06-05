@@ -116,11 +116,13 @@ Session starts
 |-------|----------------|
 | `ModelSelectorComponent.prototype.sortModels` | `/model` TUI picker — "Scope: all" view |
 | `ModelSelectorComponent.prototype.loadModels` | `/model` TUI picker — "Scope: scoped" view (configured cycling models) |
-| `AgentSession.prototype._cycleScopedModel` | `Ctrl+P` / `Ctrl+Shift+P` cycling order (non-destructive swap) |
+| `AgentSession.prototype._cycleScopedModel` | `Ctrl+P` / `Ctrl+Shift+P` cycling order (non-destructive swap, cycling does not update last-used to avoid feedback loop) |
 | `ModelRegistry.prototype.getAvailable()` | `/scoped-models` config selector, model resolution |
 | `ModelRegistry.prototype.getAll()` | `--list-models` CLI output |
 
 When no scoped models are configured, Ctrl+P falls through to `_cycleAvailableModel` which calls `getAvailable()` — already sorted by the registry patch.
+
+> **Why cycling doesn't update last-used:** Updating timestamps during Ctrl+P cycling creates a feedback loop — each cycle makes the selected model most-recent, re-sorts it to position 0, and `(currentIndex + 1) % len` always lands on the second model. Models would toggle forever between the top 2. Manual model selection (`/model`, session restore) still updates last-used.
 
 The SDK doesn't expose a sort order for model lists. Monkey-patching the component and registry methods is the only way to control ordering without rebuilding the entire picker UI.
 
