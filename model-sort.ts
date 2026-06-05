@@ -1,10 +1,11 @@
 /**
  * pi-model-sort — sort models in pi by last usage (descending).
  *
- * Strategy: monkey-patches ModelSelectorComponent.prototype.sortModels so
- * the /model picker sorts by recency instead of alphabetically by provider.
+ * Strategy: monkey-patches ModelSelectorComponent.prototype.sortModels and
+ * loadModels so the /model picker sorts by recency instead of alphabetically
+ * by provider — including the "Scope: scoped" view for Ctrl+P cycling.
  * Also patches ModelRegistry.getAvailable() and getAll() so --list-models
- * and the scoped-models selector benefit from the same ordering.
+ * and the scoped-models config selector benefit from the same ordering.
  *
  * Usage tracking is automatic — every model selection (manual, Ctrl+P cycle,
  * or session restore) updates the last-used timestamp. Data persists to
@@ -54,9 +55,15 @@ function writeConfig(config: ModelSortConfig): void {
 
 // ModelSelectorComponent sortModels patch
 
-const SORT_PATCH_KEY = "__model_sort_sort_patched";
-
 let origSortModels: ((models: Array<{ provider: string; id: string; model: unknown }>) => Array<{ provider: string; id: string; model: unknown }>) | null = null;
+
+function buildCurrentModelKey(instance: Record<string, unknown>): string | null {
+  const cm = instance.currentModel as { provider?: string; id?: string } | undefined;
+  if (cm?.provider && cm?.id) {
+    return buildModelKey(cm.provider, cm.id);
+  }
+  return null;
+}
 
 function patchSortModels(getLastUsed: () => Record<string, number>): void {
   if (origSortModels !== null) return;
@@ -69,14 +76,7 @@ function patchSortModels(getLastUsed: () => Record<string, number>): void {
     models: Array<{ provider: string; id: string; model: unknown }>,
   ) {
     const lastUsed = getLastUsed();
-
-    let currentModelKey: string | null = null;
-    const cm = this.currentModel as { provider?: string; id?: string } | undefined;
-    if (cm?.provider && cm?.id) {
-      currentModelKey = buildModelKey(cm.provider, cm.id);
-    }
-
-    return sortByLastUsed(models, lastUsed, currentModelKey);
+    return sortByLastUsed(models, lastUsed, buildCurrentModelKey(this));
   };
 }
 
@@ -84,6 +84,38 @@ function unpatchSortModels(): void {
   if (origSortModels === null) return;
   (ModelSelectorComponent.prototype as unknown as Record<string, unknown>).sortModels = origSortModels;
   origSortModels = null;
+}
+
+// ModelSelectorComponent loadModels patch — sorts scopedModelItems for the
+// "Scope: scoped" toggle in the /model picker.
+
+let origLoadModels: (() => Promise<void>) | null = null;
+
+function patchLoadModels(getLastUsed: () => Record<string, number>): void {
+  if (origLoadModels !== null) return;
+
+  const proto = ModelSelectorComponent.prototype as unknown as Record<string, unknown>;
+  origLoadModels = proto.loadModels as () => Promise<void>;
+
+  proto.loadModels = async function (this: Record<string, unknown>) {
+    await origLoadModels!.call(this);
+
+    const scopedItems = this.scopedModelItems as Array<{ provider: string; id: string; model: unknown }> | undefined;
+    if (!scopedItems || scopedItems.length === 0) return;
+
+    const lastUsed = getLastUsed();
+    this.scopedModelItems = sortByLastUsed(scopedItems, lastUsed, buildCurrentModelKey(this));
+
+    if (this.scope === "scoped") {
+      this.activeModels = this.scopedModelItems;
+    }
+  };
+}
+
+function unpatchLoadModels(): void {
+  if (origLoadModels === null) return;
+  (ModelSelectorComponent.prototype as unknown as Record<string, unknown>).loadModels = origLoadModels;
+  origLoadModels = null;
 }
 
 // ModelRegistry getAvailable / getAll patch
@@ -151,6 +183,7 @@ export default function (pi: ExtensionAPI) {
 
     patchRegistry(ctx.modelRegistry as unknown as PatchedRegistry, () => lastUsed);
     patchSortModels(() => lastUsed);
+    patchLoadModels(() => lastUsed);
 
     if (ctx.hasUI) {
       const count = Object.keys(lastUsed).length;
@@ -173,5 +206,6 @@ export default function (pi: ExtensionAPI) {
   // Cleanup on shutdown / reload
   pi.on("session_shutdown", () => {
     unpatchSortModels();
+    unpatchLoadModels();
   });
 }

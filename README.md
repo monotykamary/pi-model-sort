@@ -99,18 +99,21 @@ model_select event fires
 
 Session starts
   → Extension reads pi-model-sort.json
-  → Monkey-patches ModelSelectorComponent.prototype.sortModels
+  → Monkey-patches ModelSelectorComponent.prototype:
+      sortModels — sorts "Scope: all" view
+      loadModels — sorts "Scope: scoped" scopedModelItems after load
   → Monkey-patches ModelRegistry.prototype.getAvailable/getAll
   → Sort order: current model first → most recent → provider/id alphabetical
   → Patches survive modelRegistry.refresh()
 ```
 
-**Three patches, one goal:**
+**Four patches, full coverage:**
 
 | Patch | What it affects |
 |-------|----------------|
-| `ModelSelectorComponent.prototype.sortModels` | `/model` TUI picker (`Ctrl+L`) |
-| `ModelRegistry.prototype.getAvailable()` | Scoped-models `Ctrl+P` cycling config |
+| `ModelSelectorComponent.prototype.sortModels` | `/model` TUI picker — "Scope: all" view |
+| `ModelSelectorComponent.prototype.loadModels` | `/model` TUI picker — "Scope: scoped" view (Ctrl+P cycling models) |
+| `ModelRegistry.prototype.getAvailable()` | `/scoped-models` config selector, model resolution |
 | `ModelRegistry.prototype.getAll()` | `--list-models` CLI output |
 
 The SDK doesn't expose a sort order for model lists. Monkey-patching the component and registry methods is the only way to control ordering without rebuilding the entire picker UI.
