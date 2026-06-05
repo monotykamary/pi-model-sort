@@ -108,6 +108,9 @@ function patchLoadModels(getLastUsed: () => Record<string, number>): void {
 
     if (this.scope === "scoped") {
       this.activeModels = this.scopedModelItems;
+      // Sync filteredModels — the original loadModels set it to the
+      // unsorted scopedModelItems before our patch had a chance to sort.
+      this.filteredModels = this.scopedModelItems;
     }
   };
 }
