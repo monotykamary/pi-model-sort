@@ -26,7 +26,7 @@ Pi's `/model` selector sorts models alphabetically by provider. If you have Anth
 - **Persistent** — usage data lives in `~/.pi/agent/extensions/pi-model-sort.json`, survives restarts
 - **No config needed** — install and forget; the extension starts tracking on first use
 - **Zero setup** — with no recorded usage, models fall back to the default alphabetical order
-- **Everywhere** — the sort applies to `/model` (`Ctrl+L`), `--list-models` CLI, and the scoped-models `Ctrl+P` cycling config
+- **Everywhere** — the sort applies to `/model` (`Ctrl+L`), both "Scope: all" and "Scope: scoped" views, `--list-models` CLI, and the `/scoped-models` config selector
 
 No `settings.json` modifications. No manual maintenance. No database.
 
@@ -37,9 +37,10 @@ The extension works automatically — there are no commands to learn.
 ```bash
 # Install, then just use pi normally
 /model                    # Most recently used models now appear at the top
-Ctrl+P                    # Cycle through models — recency order still applies
 pi --list-models          # CLI output is also sorted by last usage
 ```
+
+Open `/model` and press `Tab` to switch between "Scope: all" and "Scope: scoped" — both views are sorted by recency.
 
 ### Config File
 
@@ -112,7 +113,7 @@ Session starts
 | Patch | What it affects |
 |-------|----------------|
 | `ModelSelectorComponent.prototype.sortModels` | `/model` TUI picker — "Scope: all" view |
-| `ModelSelectorComponent.prototype.loadModels` | `/model` TUI picker — "Scope: scoped" view (Ctrl+P cycling models) |
+| `ModelSelectorComponent.prototype.loadModels` | `/model` TUI picker — "Scope: scoped" view (configured cycling models) |
 | `ModelRegistry.prototype.getAvailable()` | `/scoped-models` config selector, model resolution |
 | `ModelRegistry.prototype.getAll()` | `--list-models` CLI output |
 
