@@ -1,11 +1,13 @@
 /**
  * pi-model-sort — sort models in pi by last usage (descending).
  *
- * Strategy: monkey-patches ModelSelectorComponent.prototype.sortModels and
- * loadModels so the /model picker sorts by recency instead of alphabetically
- * by provider — including the "Scope: scoped" view for Ctrl+P cycling.
- * Also patches ModelRegistry.getAvailable() and getAll() so --list-models
- * and the scoped-models config selector benefit from the same ordering.
+ * Strategy: monkey-patches three areas:
+ *   ModelSelectorComponent.prototype.sortModels and loadModels — sorts both
+ *   "Scope: all" and "Scope: scoped" views in the /model TUI picker.
+ *   ModelRegistry.prototype.getAvailable/getAll — sorts --list-models CLI
+ *   and the /scoped-models config selector.
+ *   AgentSession.prototype._cycleScopedModel — sorts the Ctrl+P / Ctrl+Shift+P
+ *   cycling order (non-destructively — the configured order is preserved).
  *
  * Usage tracking is automatic — every model selection (manual, Ctrl+P cycle,
  * or session restore) updates the last-used timestamp. Data persists to
@@ -16,7 +18,7 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { ModelRegistry, ModelSelectorComponent } from "@earendil-works/pi-coding-agent";
+import { AgentSession, ModelRegistry, ModelSelectorComponent } from "@earendil-works/pi-coding-agent";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -188,6 +190,55 @@ function unpatchRegistry(registry: PatchedRegistry): void {
   delete raw.__model_sort_orig_getAll;
 }
 
+// AgentSession _cycleScopedModel patch — sorts the scoped models list
+// before cycling so Ctrl+P / Ctrl+Shift+P follows last-used order instead
+// of the configured order. Non-destructive: the session's stored order is
+// temporarily swapped and restored after the cycle lookup.
+
+type ScopedModelEntry = { model: { provider: string; id: string }; thinkingLevel?: string };
+
+let origCycleScopedModel: ((direction: string) => Promise<unknown>) | null = null;
+
+function patchCycleScopedModel(getLastUsed: () => Record<string, number>): void {
+  if (origCycleScopedModel !== null) return;
+
+  const proto = AgentSession.prototype as unknown as Record<string, unknown>;
+  origCycleScopedModel = proto._cycleScopedModel as (direction: string) => Promise<unknown>;
+
+  proto._cycleScopedModel = async function (this: Record<string, unknown>, direction: string) {
+    const lastUsed = getLastUsed();
+    const origScoped = this._scopedModels as ScopedModelEntry[] | undefined;
+
+    if (!origScoped || origScoped.length <= 1) {
+      return origCycleScopedModel!.call(this, direction);
+    }
+
+    // Sort by last-used without mutating the session's stored order.
+    const sorted = [...origScoped].sort((a, b) => {
+      const aKey = buildModelKey(a.model.provider, a.model.id);
+      const bKey = buildModelKey(b.model.provider, b.model.id);
+      const aLast = lastUsed[aKey] ?? 0;
+      const bLast = lastUsed[bKey] ?? 0;
+      if (aLast !== bLast) return bLast - aLast;
+      return a.model.provider.localeCompare(b.model.provider) || a.model.id.localeCompare(b.model.id);
+    });
+
+    // Temporarily swap for the cycle lookup, restore afterward.
+    this._scopedModels = sorted;
+    try {
+      return await origCycleScopedModel!.call(this, direction);
+    } finally {
+      this._scopedModels = origScoped;
+    }
+  };
+}
+
+function unpatchCycleScopedModel(): void {
+  if (origCycleScopedModel === null) return;
+  (AgentSession.prototype as unknown as Record<string, unknown>)._cycleScopedModel = origCycleScopedModel;
+  origCycleScopedModel = null;
+}
+
 // Extension
 
 export default function (pi: ExtensionAPI) {
@@ -200,6 +251,7 @@ export default function (pi: ExtensionAPI) {
     patchRegistry(ctx.modelRegistry as unknown as PatchedRegistry, () => lastUsed);
     patchSortModels(() => lastUsed);
     patchLoadModels(() => lastUsed);
+    patchCycleScopedModel(() => lastUsed);
 
     if (ctx.hasUI) {
       const count = Object.keys(lastUsed).length;
@@ -223,5 +275,6 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_shutdown", () => {
     unpatchSortModels();
     unpatchLoadModels();
+    unpatchCycleScopedModel();
   });
 }

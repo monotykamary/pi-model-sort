@@ -36,7 +36,8 @@ The extension works automatically — there are no commands to learn.
 
 ```bash
 # Install, then just use pi normally
-/model                    # Most recently used models now appear at the top
+/model                    # Most recently used models appear at the top
+Ctrl+P / Ctrl+Shift+P     # Cycle through models in last-used order
 pi --list-models          # CLI output is also sorted by last usage
 ```
 
@@ -104,18 +105,22 @@ Session starts
       sortModels — sorts "Scope: all" view
       loadModels — sorts "Scope: scoped" scopedModelItems after load
   → Monkey-patches ModelRegistry.prototype.getAvailable/getAll
+  → Monkey-patches AgentSession.prototype._cycleScopedModel
   → Sort order: current model first → most recent → provider/id alphabetical
   → Patches survive modelRegistry.refresh()
 ```
 
-**Four patches, full coverage:**
+**Five patches, full coverage:**
 
 | Patch | What it affects |
 |-------|----------------|
 | `ModelSelectorComponent.prototype.sortModels` | `/model` TUI picker — "Scope: all" view |
 | `ModelSelectorComponent.prototype.loadModels` | `/model` TUI picker — "Scope: scoped" view (configured cycling models) |
+| `AgentSession.prototype._cycleScopedModel` | `Ctrl+P` / `Ctrl+Shift+P` cycling order (non-destructive swap) |
 | `ModelRegistry.prototype.getAvailable()` | `/scoped-models` config selector, model resolution |
 | `ModelRegistry.prototype.getAll()` | `--list-models` CLI output |
+
+When no scoped models are configured, Ctrl+P falls through to `_cycleAvailableModel` which calls `getAvailable()` — already sorted by the registry patch.
 
 The SDK doesn't expose a sort order for model lists. Monkey-patching the component and registry methods is the only way to control ordering without rebuilding the entire picker UI.
 
