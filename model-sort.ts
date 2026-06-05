@@ -111,6 +111,19 @@ function patchLoadModels(getLastUsed: () => Record<string, number>): void {
       // Sync filteredModels — the original loadModels set it to the
       // unsorted scopedModelItems before our patch had a chance to sort.
       this.filteredModels = this.scopedModelItems;
+
+      // Recalculate selectedIndex — the original loadModels computed it
+      // from the unsorted array, so the cursor is at the old position.
+      const currentKey = buildCurrentModelKey(this);
+      if (currentKey) {
+        const filtered = this.filteredModels as Array<{ provider: string; id: string }>;
+        const newIndex = filtered.findIndex(
+          (item) => buildModelKey(item.provider, item.id) === currentKey,
+        );
+        if (newIndex >= 0) {
+          this.selectedIndex = newIndex;
+        }
+      }
     }
   };
 }
