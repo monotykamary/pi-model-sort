@@ -136,6 +136,47 @@ function unpatchLoadModels(): void {
   origLoadModels = null;
 }
 
+// ModelSelectorComponent filterModels patch — re-applies last-used sort after
+// fuzzyFilter re-orders results by match quality. Without this, typing in the
+// /model picker search box discards the last-used order.
+
+let origFilterModels: ((query: string) => void) | null = null;
+
+function patchFilterModels(getLastUsed: () => Record<string, number>): void {
+  if (origFilterModels !== null) return;
+
+  const proto = ModelSelectorComponent.prototype as unknown as Record<string, unknown>;
+  origFilterModels = proto.filterModels as (query: string) => void;
+
+  proto.filterModels = function (this: Record<string, unknown>, query: string) {
+    origFilterModels!.call(this, query);
+
+    const filtered = this.filteredModels as Array<{ provider: string; id: string; model: unknown }> | undefined;
+    if (!filtered || filtered.length <= 1 || !query) return;
+
+    const lastUsed = getLastUsed();
+    this.filteredModels = sortByLastUsed(filtered, lastUsed, buildCurrentModelKey(this));
+
+    // Re-sync selectedIndex — fuzzyFilter may have moved the current model.
+    const currentKey = buildCurrentModelKey(this);
+    if (currentKey) {
+      const newFiltered = this.filteredModels as Array<{ provider: string; id: string }>;
+      const newIndex = newFiltered.findIndex(
+        (item) => buildModelKey(item.provider, item.id) === currentKey,
+      );
+      if (newIndex >= 0) {
+        this.selectedIndex = newIndex;
+      }
+    }
+  };
+}
+
+function unpatchFilterModels(): void {
+  if (origFilterModels === null) return;
+  (ModelSelectorComponent.prototype as unknown as Record<string, unknown>).filterModels = origFilterModels;
+  origFilterModels = null;
+}
+
 // ModelRegistry getAvailable / getAll patch
 
 const REGISTRY_PATCH_KEY = "__model_sort_registry_patched";
@@ -251,6 +292,7 @@ export default function (pi: ExtensionAPI) {
     patchRegistry(ctx.modelRegistry as unknown as PatchedRegistry, () => lastUsed);
     patchSortModels(() => lastUsed);
     patchLoadModels(() => lastUsed);
+    patchFilterModels(() => lastUsed);
     patchCycleScopedModel(() => lastUsed);
 
     if (ctx.hasUI) {
@@ -280,6 +322,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_shutdown", () => {
     unpatchSortModels();
     unpatchLoadModels();
+    unpatchFilterModels();
     unpatchCycleScopedModel();
   });
 }
