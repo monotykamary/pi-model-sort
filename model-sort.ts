@@ -168,6 +168,10 @@ function patchFilterModels(getLastUsed: () => Record<string, number>): void {
         this.selectedIndex = newIndex;
       }
     }
+
+    // Re-render — the original filterModels already called updateList() before
+    // we re-sorted, so the UI is stale until the next input event.
+    (this.updateList as () => void)();
   };
 }
 
