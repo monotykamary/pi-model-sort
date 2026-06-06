@@ -149,10 +149,29 @@ function patchFilterModels(getLastUsed: () => Record<string, number>): void {
   origFilterModels = proto.filterModels as (query: string) => void;
 
   proto.filterModels = function (this: Record<string, unknown>, query: string) {
-    origFilterModels!.call(this, query);
+    // Suppress the original's updateList() call — we'll call it once after
+    // re-sorting to avoid a double-render.
+    const origUpdateList = this.updateList as () => void;
+    this.updateList = (() => {}) as unknown as () => void;
+
+    try {
+      origFilterModels!.call(this, query);
+    } finally {
+      this.updateList = origUpdateList as unknown as () => void;
+    }
+
+    // Empty query: nothing to re-sort (activeModels is already sorted by our
+    // sortModels/loadModels patches), just render the original result.
+    if (!query) {
+      origUpdateList.call(this);
+      return;
+    }
 
     const filtered = this.filteredModels as Array<{ provider: string; id: string; model: unknown }> | undefined;
-    if (!filtered || filtered.length <= 1 || !query) return;
+    if (!filtered || filtered.length <= 1) {
+      origUpdateList.call(this);
+      return;
+    }
 
     const lastUsed = getLastUsed();
     this.filteredModels = sortByLastUsed(filtered, lastUsed, buildCurrentModelKey(this));
@@ -169,9 +188,8 @@ function patchFilterModels(getLastUsed: () => Record<string, number>): void {
       }
     }
 
-    // Re-render — the original filterModels already called updateList() before
-    // we re-sorted, so the UI is stale until the next input event.
-    (this.updateList as () => void)();
+    // Render once with the final sorted list.
+    origUpdateList.call(this);
   };
 }
 
