@@ -10,6 +10,13 @@ export interface ModelSortConfig {
   lastUsed: Record<string, number>;
 }
 
+/** Parse a model key into [provider, modelId]. Returns undefined if malformed. */
+export function parseModelKey(key: string): [provider: string, modelId: string] | undefined {
+  const idx = key.indexOf("/");
+  if (idx === -1) return undefined;
+  return [key.substring(0, idx), key.substring(idx + 1)];
+}
+
 /** Build a stable model key from provider and model id. */
 export function buildModelKey(provider: string, modelId: string): string {
   return `${provider}/${modelId}`;

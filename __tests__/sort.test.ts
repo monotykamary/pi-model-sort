@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildModelKey, sortByLastUsed } from "../src/index.js";
+import { buildModelKey, parseModelKey, sortByLastUsed } from "../src/index.js";
 
 describe("buildModelKey", () => {
   it("builds a key from provider and model id", () => {
@@ -10,6 +10,37 @@ describe("buildModelKey", () => {
 
   it("builds a key for openai provider", () => {
     expect(buildModelKey("openai", "gpt-4o")).toBe("openai/gpt-4o");
+  });
+});
+
+describe("parseModelKey", () => {
+  it("parses a simple provider/modelId key", () => {
+    expect(parseModelKey("anthropic/claude-sonnet-4")).toEqual([
+      "anthropic",
+      "claude-sonnet-4",
+    ]);
+  });
+
+  it("parses a key where modelId contains slashes", () => {
+    expect(parseModelKey("openrouter/anthropic/claude-sonnet-4")).toEqual([
+      "openrouter",
+      "anthropic/claude-sonnet-4",
+    ]);
+  });
+
+  it("returns undefined for keys without a slash", () => {
+    expect(parseModelKey("noprovider")).toBeUndefined();
+  });
+
+  it("returns undefined for empty string", () => {
+    expect(parseModelKey("")).toBeUndefined();
+  });
+
+  it("round-trips through buildModelKey", () => {
+    const provider = "openrouter";
+    const modelId = "anthropic/claude-sonnet-4";
+    const key = buildModelKey(provider, modelId);
+    expect(parseModelKey(key)).toEqual([provider, modelId]);
   });
 });
 

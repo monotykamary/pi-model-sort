@@ -26,6 +26,7 @@ import {
   buildModelKey,
   CONFIG_FILENAME,
   type ModelSortConfig,
+  parseModelKey,
   sortByLastUsed,
 } from "./src/index.js";
 
@@ -302,12 +303,32 @@ function unpatchCycleScopedModel(): void {
   origCycleScopedModel = null;
 }
 
+// MRU model lookup — finds the most recently used model that exists in the
+// registry and has auth configured. Returns undefined if no usable model found.
+
+function findMruModel(
+  lastUsed: Record<string, number>,
+  registry: { find(provider: string, modelId: string): unknown; hasConfiguredAuth(model: unknown): boolean },
+): unknown | undefined {
+  const sorted = Object.entries(lastUsed).sort(([, a], [, b]) => b - a);
+  for (const [key] of sorted) {
+    const parsed = parseModelKey(key);
+    if (!parsed) continue;
+    const [provider, modelId] = parsed;
+    const model = registry.find(provider, modelId);
+    if (model && registry.hasConfiguredAuth(model)) {
+      return model;
+    }
+  }
+  return undefined;
+}
+
 // Extension
 
 export default function (pi: ExtensionAPI) {
   let lastUsed: Record<string, number> = {};
 
-  pi.on("session_start", async (_event, ctx) => {
+  pi.on("session_start", async (event, ctx) => {
     const config = readConfig();
     lastUsed = config.lastUsed;
 
@@ -316,6 +337,26 @@ export default function (pi: ExtensionAPI) {
     patchLoadModels(() => lastUsed);
     patchFilterModels(() => lastUsed);
     patchCycleScopedModel(() => lastUsed);
+
+    // Override initial model to MRU on new sessions.
+    // Pi core picks the saved default if in scope, otherwise scopedModels[0].
+    // This hijack switches to the most recently used model instead, so your
+    // actual usage history determines the default — not alphabetical scope order.
+    if (
+      (event.reason === "startup" || event.reason === "new") &&
+      Object.keys(lastUsed).length > 0
+    ) {
+      const mruModel = findMruModel(lastUsed, ctx.modelRegistry);
+      const currentModel = ctx.model as { provider: string; id: string } | undefined;
+      if (
+        mruModel &&
+        (!currentModel ||
+          currentModel.provider !== (mruModel as { provider: string }).provider ||
+          currentModel.id !== (mruModel as { id: string }).id)
+      ) {
+        await pi.setModel(mruModel as Parameters<typeof pi.setModel>[0]);
+      }
+    }
 
     if (ctx.hasUI) {
       const count = Object.keys(lastUsed).length;

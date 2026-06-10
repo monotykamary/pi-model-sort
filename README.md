@@ -23,6 +23,7 @@ Pi's `/model` selector sorts models alphabetically by provider. If you have Anth
 
 - **Automatic tracking** — every `/model` switch, `Ctrl+P` cycle, and session restore is recorded with a Unix timestamp
 - **Sort order** — current model first → most recently used descending → provider/id alphabetical fallback
+- **MRU on startup** — new sessions start on your most recently used model instead of `scopedModels[0]` or the hardcoded provider default order
 - **Persistent** — usage data lives in `~/.pi/agent/extensions/pi-model-sort.json`, survives restarts
 - **No config needed** — install and forget; the extension starts tracking on first use
 - **Zero setup** — with no recorded usage, models fall back to the default alphabetical order
@@ -99,7 +100,7 @@ model_select event fires
   → Writes to pi-model-sort.json
   → Next /model opens with updated sort
 
-Session starts
+Session starts (startup / new)
   → Extension reads pi-model-sort.json
   → Monkey-patches ModelSelectorComponent.prototype:
       sortModels — sorts "Scope: all" view
@@ -108,9 +109,12 @@ Session starts
   → Monkey-patches AgentSession.prototype._cycleScopedModel
   → Sort order: current model first → most recent → provider/id alphabetical
   → Patches survive modelRegistry.refresh()
+  → Overrides initial model to MRU via pi.setModel()
+      if pi core chose a different model (scopedModels[0], defaultModelPerProvider)
+      only on startup and new session starts — not resume, reload, or fork
 ```
 
-**Five patches, full coverage:**
+**Five patches + MRU startup override, full coverage:**
 
 | Patch | What it affects |
 |-------|----------------|
@@ -119,6 +123,7 @@ Session starts
 | `AgentSession.prototype._cycleScopedModel` | `Ctrl+P` / `Ctrl+Shift+P` cycling order (non-destructive swap, cycling does not update last-used to avoid feedback loop) |
 | `ModelRegistry.prototype.getAvailable()` | `/scoped-models` config selector, model resolution |
 | `ModelRegistry.prototype.getAll()` | `--list-models` CLI output |
+| `pi.setModel()` on `session_start` | MRU model selection on startup and `/new` — overrides pi core's default |
 
 When no scoped models are configured, Ctrl+P falls through to `_cycleAvailableModel` which calls `getAvailable()` — already sorted by the registry patch.
 
