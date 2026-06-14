@@ -357,16 +357,6 @@ export default function (pi: ExtensionAPI) {
         await pi.setModel(mruModel as Parameters<typeof pi.setModel>[0]);
       }
     }
-
-    if (ctx.hasUI) {
-      const count = Object.keys(lastUsed).length;
-      ctx.ui.notify(
-        count > 0
-          ? `pi-model-sort: ${count} model(s) tracked — sorting by last usage`
-          : "pi-model-sort: tracking started — models will sort by recency after first use",
-        "info",
-      );
-    }
   });
 
   // Track model selections (manual, session restore).
