@@ -65,6 +65,12 @@ No manual editing needed. To clear usage history, delete the file and `/reload`.
 **With `pi install`** (recommended):
 
 ```bash
+pi install npm:pi-model-sort
+```
+
+Or install from GitHub:
+
+```bash
 pi install https://github.com/monotykamary/pi-model-sort
 ```
 
