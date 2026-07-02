@@ -18,9 +18,8 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { AgentSession, ModelRegistry, ModelSelectorComponent } from "@earendil-works/pi-coding-agent";
+import { AgentSession, ModelRegistry, ModelSelectorComponent, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   buildModelKey,
@@ -30,8 +29,7 @@ import {
   sortByLastUsed,
 } from "./src/index.js";
 
-const HOME = homedir();
-const CONFIG_PATH = join(HOME, ".pi", "agent", "extensions", CONFIG_FILENAME);
+const CONFIG_PATH = join(getAgentDir(), "extensions", CONFIG_FILENAME);
 
 // Config I/O
 
@@ -49,7 +47,7 @@ function readConfig(): ModelSortConfig {
 }
 
 function writeConfig(config: ModelSortConfig): void {
-  const dir = join(HOME, ".pi", "agent", "extensions");
+  const dir = join(getAgentDir(), "extensions");
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
   }
