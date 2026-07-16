@@ -2,8 +2,9 @@
  * pi-model-sort — sort models in pi by last usage (descending).
  *
  * Strategy: monkey-patches three areas:
- *   ModelSelectorComponent.prototype.sortModels and loadModels — sorts both
- *   "Scope: all" and "Scope: scoped" views in the /model TUI picker.
+ *   ModelSelectorComponent.prototype.sortModels and scoped loader
+ *   (loadModelsFromSnapshot on pi 0.80.8+, loadModels on older pi) — sorts
+ *   both "Scope: all" and "Scope: scoped" views in the /model TUI picker.
  *   ModelRegistry.prototype.getAvailable/getAll — sorts --list-models CLI
  *   and the /scoped-models config selector.
  *   AgentSession.prototype._cycleScopedModel — sorts the Ctrl+P / Ctrl+Shift+P
@@ -87,52 +88,84 @@ function unpatchSortModels(): void {
   origSortModels = null;
 }
 
-// ModelSelectorComponent loadModels patch — sorts scopedModelItems for the
-// "Scope: scoped" toggle in the /model picker.
+// ModelSelectorComponent scoped-loader patch — sorts scopedModelItems for
+// the "Scope: scoped" toggle in the /model picker.
+//
+// pi 0.80.8 split the old loadModels() into a synchronous
+// loadModelsFromSnapshot() (used for both the initial render and after each
+// catalog refresh) plus a new async refreshModels(). The scoped items are built
+// directly inside the snapshot loader and never pass through sortModels, so
+// this patch re-sorts them there. We hook whichever method the running pi
+// exposes — new (loadModelsFromSnapshot, sync) or old (loadModels, async) — so
+// the sort applies on initial render, after a refresh, and (because
+// scopedModelItems is re-sorted even when the active scope is "all") survives
+// the Tab toggle to "scoped".
 
-let origLoadModels: (() => Promise<void>) | null = null;
+let origScopedLoader: ((this: unknown) => unknown) | null = null;
+let scopedLoaderName: string | null = null;
 
-function patchLoadModels(getLastUsed: () => Record<string, number>): void {
-  if (origLoadModels !== null) return;
+function sortScopedItems(instance: Record<string, unknown>, getLastUsed: () => Record<string, number>): void {
+  const scopedItems = instance.scopedModelItems as
+    | Array<{ provider: string; id: string; model: unknown }>
+    | undefined;
+  if (!scopedItems || scopedItems.length === 0) return;
 
-  const proto = ModelSelectorComponent.prototype as unknown as Record<string, unknown>;
-  origLoadModels = proto.loadModels as () => Promise<void>;
+  const lastUsed = getLastUsed();
+  instance.scopedModelItems = sortByLastUsed(scopedItems, lastUsed, buildCurrentModelKey(instance));
 
-  proto.loadModels = async function (this: Record<string, unknown>) {
-    await origLoadModels!.call(this);
+  if (instance.scope === "scoped") {
+    // Sync activeModels/filteredModels — the loader set them to the unsorted
+    // scopedModelItems before our patch had a chance to sort.
+    instance.activeModels = instance.scopedModelItems;
+    instance.filteredModels = instance.scopedModelItems;
 
-    const scopedItems = this.scopedModelItems as Array<{ provider: string; id: string; model: unknown }> | undefined;
-    if (!scopedItems || scopedItems.length === 0) return;
-
-    const lastUsed = getLastUsed();
-    this.scopedModelItems = sortByLastUsed(scopedItems, lastUsed, buildCurrentModelKey(this));
-
-    if (this.scope === "scoped") {
-      this.activeModels = this.scopedModelItems;
-      // Sync filteredModels — the original loadModels set it to the
-      // unsorted scopedModelItems before our patch had a chance to sort.
-      this.filteredModels = this.scopedModelItems;
-
-      // Recalculate selectedIndex — the original loadModels computed it
-      // from the unsorted array, so the cursor is at the old position.
-      const currentKey = buildCurrentModelKey(this);
-      if (currentKey) {
-        const filtered = this.filteredModels as Array<{ provider: string; id: string }>;
-        const newIndex = filtered.findIndex(
-          (item) => buildModelKey(item.provider, item.id) === currentKey,
-        );
-        if (newIndex >= 0) {
-          this.selectedIndex = newIndex;
-        }
+    // Recalculate selectedIndex — the loader computed it from the unsorted
+    // array, so the cursor is at the old position.
+    const currentKey = buildCurrentModelKey(instance);
+    if (currentKey) {
+      const filtered = instance.filteredModels as Array<{ provider: string; id: string }>;
+      const newIndex = filtered.findIndex(
+        (item) => buildModelKey(item.provider, item.id) === currentKey,
+      );
+      if (newIndex >= 0) {
+        instance.selectedIndex = newIndex;
       }
     }
-  };
+  }
 }
 
-function unpatchLoadModels(): void {
-  if (origLoadModels === null) return;
-  (ModelSelectorComponent.prototype as unknown as Record<string, unknown>).loadModels = origLoadModels;
-  origLoadModels = null;
+function patchScopedLoader(getLastUsed: () => Record<string, number>): void {
+  if (origScopedLoader !== null) return;
+
+  const proto = ModelSelectorComponent.prototype as unknown as Record<string, unknown>;
+
+  // pi 0.80.8+ — synchronous snapshot loader (initial render + after refresh).
+  if (typeof proto.loadModelsFromSnapshot === "function") {
+    origScopedLoader = proto.loadModelsFromSnapshot as (this: unknown) => unknown;
+    scopedLoaderName = "loadModelsFromSnapshot";
+    proto.loadModelsFromSnapshot = function (this: Record<string, unknown>) {
+      origScopedLoader!.call(this);
+      sortScopedItems(this, getLastUsed);
+    };
+    return;
+  }
+
+  // pi <= 0.80.3 — async loadModels.
+  if (typeof proto.loadModels === "function") {
+    origScopedLoader = proto.loadModels as (this: unknown) => unknown;
+    scopedLoaderName = "loadModels";
+    proto.loadModels = async function (this: Record<string, unknown>) {
+      await origScopedLoader!.call(this);
+      sortScopedItems(this, getLastUsed);
+    };
+  }
+}
+
+function unpatchScopedLoader(): void {
+  if (origScopedLoader === null || scopedLoaderName === null) return;
+  (ModelSelectorComponent.prototype as unknown as Record<string, unknown>)[scopedLoaderName] = origScopedLoader;
+  origScopedLoader = null;
+  scopedLoaderName = null;
 }
 
 // ModelSelectorComponent filterModels patch — re-applies last-used sort after
@@ -160,7 +193,7 @@ function patchFilterModels(getLastUsed: () => Record<string, number>): void {
     }
 
     // Empty query: nothing to re-sort (activeModels is already sorted by our
-    // sortModels/loadModels patches), just render the original result.
+    // sortModels/scoped-loader patches), just render the original result.
     if (!query) {
       origUpdateList.call(this);
       return;
@@ -332,7 +365,7 @@ export default function (pi: ExtensionAPI) {
 
     patchRegistry(ctx.modelRegistry as unknown as PatchedRegistry, () => lastUsed);
     patchSortModels(() => lastUsed);
-    patchLoadModels(() => lastUsed);
+    patchScopedLoader(() => lastUsed);
     patchFilterModels(() => lastUsed);
     patchCycleScopedModel(() => lastUsed);
 
@@ -372,7 +405,7 @@ export default function (pi: ExtensionAPI) {
   // Cleanup on shutdown / reload
   pi.on("session_shutdown", () => {
     unpatchSortModels();
-    unpatchLoadModels();
+    unpatchScopedLoader();
     unpatchFilterModels();
     unpatchCycleScopedModel();
   });

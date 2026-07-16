@@ -110,7 +110,8 @@ Session starts (startup / new)
   → Extension reads pi-model-sort.json
   → Monkey-patches ModelSelectorComponent.prototype:
       sortModels — sorts "Scope: all" view
-      loadModels — sorts "Scope: scoped" scopedModelItems after load
+      loadModelsFromSnapshot — sorts "Scope: scoped" scopedModelItems after load
+        (loadModels on pi <= 0.80.3; renamed/split in 0.80.8)
   → Monkey-patches ModelRegistry.prototype.getAvailable/getAll
   → Monkey-patches AgentSession.prototype._cycleScopedModel
   → Sort order: current model first → most recent → provider/id alphabetical
@@ -125,7 +126,7 @@ Session starts (startup / new)
 | Patch | What it affects |
 |-------|----------------|
 | `ModelSelectorComponent.prototype.sortModels` | `/model` TUI picker — "Scope: all" view |
-| `ModelSelectorComponent.prototype.loadModels` | `/model` TUI picker — "Scope: scoped" view (configured cycling models) |
+| `ModelSelectorComponent.prototype.loadModelsFromSnapshot` (or `loadModels` on older pi) | `/model` TUI picker — "Scope: scoped" view (configured cycling models) |
 | `AgentSession.prototype._cycleScopedModel` | `Ctrl+P` / `Ctrl+Shift+P` cycling order (non-destructive swap, cycling does not update last-used to avoid feedback loop) |
 | `ModelRegistry.prototype.getAvailable()` | `/scoped-models` config selector, model resolution |
 | `ModelRegistry.prototype.getAll()` | `--list-models` CLI output |
