@@ -5,9 +5,56 @@
 /** Default config file name (placed in ~/.pi/agent/extensions/). */
 export const CONFIG_FILENAME = "pi-model-sort.json";
 
+/** Thinking levels supported by pi. Mirrors ThinkingLevel from pi-agent-core. */
+export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+
+/** All valid thinking levels, ascending. */
+export const THINKING_LEVELS: readonly ThinkingLevel[] = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+];
+
+/** Type guard for ThinkingLevel. */
+export function isThinkingLevel(value: unknown): value is ThinkingLevel {
+  return typeof value === "string" && (THINKING_LEVELS as readonly string[]).includes(value);
+}
+
 export interface ModelSortConfig {
   /** Map of "provider/modelId" → last-used Unix timestamp (ms). */
   lastUsed: Record<string, number>;
+  /** Map of "provider/modelId" → last-used thinking level. */
+  thinking: Record<string, ThinkingLevel>;
+}
+
+/**
+ * Parse a raw config file payload into a ModelSortConfig, dropping malformed
+ * entries. Unknown fields are ignored; missing fields default to empty maps.
+ */
+export function parseConfig(raw: unknown): ModelSortConfig {
+  const config: ModelSortConfig = { lastUsed: {}, thinking: {} };
+  if (typeof raw !== "object" || raw === null) return config;
+
+  const obj = raw as Record<string, unknown>;
+  if (typeof obj.lastUsed === "object" && obj.lastUsed !== null) {
+    for (const [key, value] of Object.entries(obj.lastUsed)) {
+      if (typeof value === "number" && Number.isFinite(value)) {
+        config.lastUsed[key] = value;
+      }
+    }
+  }
+  if (typeof obj.thinking === "object" && obj.thinking !== null) {
+    for (const [key, value] of Object.entries(obj.thinking)) {
+      if (isThinkingLevel(value)) {
+        config.thinking[key] = value;
+      }
+    }
+  }
+  return config;
 }
 
 /** Parse a model key into [provider, modelId]. Returns undefined if malformed. */
@@ -57,4 +104,84 @@ export function sortByLastUsed<T extends { provider: string; id: string }>(
     return a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id);
   });
   return sorted;
+}
+
+/**
+ * Per-model thinking-level memory.
+ *
+ * Pi keeps one global thinking level: on every model switch it carries the
+ * current level over and clamps it to the new model's capabilities, so each
+ * model needs manual re-adjustment. This tracker records the last level used
+ * per model and computes which level to restore on switch.
+ *
+ * Attribution relies on pi's event ordering: setModel/cycle swap the model
+ * and re-clamp the level (emitting thinking_level_select) *before* emitting
+ * model_select. So when a thinking_level_select arrives whose current model
+ * no longer matches the tracked active model, the change belongs to a switch:
+ * previousLevel is the final level of the model being left (recorded), while
+ * the new level is inherited rather than chosen (not recorded).
+ */
+export interface ThinkingTrackerState {
+  /** Persisted map of "provider/modelId" → last-used thinking level. */
+  thinking: Record<string, ThinkingLevel>;
+  /** Key of the model last accounted for (session start or last model_select). */
+  activeKey: string | null;
+  /** Whether a switch-time re-clamp fired since the last model_select. */
+  sawSwitchClamp: boolean;
+}
+
+export function createThinkingTracker(): ThinkingTrackerState {
+  return { thinking: {}, activeKey: null, sawSwitchClamp: false };
+}
+
+function recordLevel(state: ThinkingTrackerState, key: string, level: ThinkingLevel): boolean {
+  if (state.thinking[key] === level) return false;
+  state.thinking[key] = level;
+  return true;
+}
+
+/**
+ * Record a thinking_level_select event. currentKey is the model pi reports as
+ * active at event time. Returns true when the thinking map changed.
+ */
+export function recordThinkingSelect(
+  state: ThinkingTrackerState,
+  currentKey: string | null,
+  level: ThinkingLevel,
+  previousLevel: ThinkingLevel,
+): boolean {
+  if (currentKey !== null && state.activeKey !== null && currentKey !== state.activeKey) {
+    state.sawSwitchClamp = true;
+    return recordLevel(state, state.activeKey, previousLevel);
+  }
+  const key = currentKey ?? state.activeKey;
+  if (key === null) return false;
+  return recordLevel(state, key, level);
+}
+
+/**
+ * Account for a model_select event and decide which level to restore, if any.
+ * currentLevel is the session's thinking level after pi's switch-time clamp.
+ * Sets activeKey to newKey — callers must apply the returned level afterwards
+ * (via pi.setThinkingLevel) so the emitted thinking_level_select attributes
+ * the effective, possibly further-clamped level to the new model.
+ */
+export function handleModelSelect(
+  state: ThinkingTrackerState,
+  newKey: string,
+  previousKey: string | null,
+  currentLevel: ThinkingLevel,
+): ThinkingLevel | null {
+  // No re-clamp during the switch means the level carried over unchanged, so
+  // currentLevel is also the previous model's final level. When a re-clamp did
+  // fire, recordThinkingSelect already stored the previous model's level.
+  if (previousKey !== null && !state.sawSwitchClamp) {
+    recordLevel(state, previousKey, currentLevel);
+  }
+  state.sawSwitchClamp = false;
+  state.activeKey = newKey;
+
+  const remembered = state.thinking[newKey];
+  if (remembered === undefined || remembered === currentLevel) return null;
+  return remembered;
 }

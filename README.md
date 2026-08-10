@@ -24,6 +24,7 @@ Pi's `/model` selector sorts models alphabetically by provider. If you have Anth
 - **Automatic tracking** — every `/model` switch, `Ctrl+P` cycle, and session restore is recorded with a Unix timestamp
 - **Sort order** — current model first → most recently used descending → provider/id alphabetical fallback
 - **MRU on startup** — new sessions start on your most recently used model instead of `scopedModels[0]` or the hardcoded provider default order
+- **Per-model thinking levels** — remembers the thinking level you last used on each model and restores it on every switch (`/model`, `Ctrl+P`, session restore), clamped to what each model supports
 - **Persistent** — usage data lives in `~/.pi/agent/extensions/pi-model-sort.json`, survives restarts
 - **No config needed** — install and forget; the extension starts tracking on first use
 - **Zero setup** — with no recorded usage, models fall back to the default alphabetical order
@@ -54,11 +55,25 @@ The extension creates `~/.pi/agent/extensions/pi-model-sort.json` automatically 
     "anthropic/claude-sonnet-4-20250514": 1717000000000,
     "openai/gpt-4o": 1716995000000,
     "google/gemini-2.5-pro": 1716000000000
+  },
+  "thinking": {
+    "deepseek/deepseek-v4-flash": "max",
+    "anthropic/claude-sonnet-4-20250514": "high"
   }
 }
 ```
 
 No manual editing needed. To clear usage history, delete the file and `/reload`.
+
+### Per-Model Thinking Levels
+
+Pi keeps one global thinking level: switching models carries the current level over and clamps it to the new model, so you have to re-adjust it after every switch. This extension learns your per-model preference automatically:
+
+- Change the level with `Ctrl+T` or `/thinking` — it's recorded for the active model
+- Switch models — the model's last-used level is restored (including when cycling with `Ctrl+P`)
+- The restored level is clamped to what the model supports, so a `max` remembered for one model can never push a claude model past `high`
+
+Example: deepseek-v4-flash stays on `max`, luna on `xhigh`, claude models on `high` — set each once and every switch lands on the right level.
 
 ## Install
 

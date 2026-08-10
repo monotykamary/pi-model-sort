@@ -14,6 +14,11 @@
  * or session restore) updates the last-used timestamp. Data persists to
  * ~/.pi/agent/extensions/pi-model-sort.json.
  *
+ * It also remembers the thinking level last used on each model and restores
+ * it on every switch (including Ctrl+P cycling), clamped to what the model
+ * supports — deepseek stays on max, claude on high, without manual
+ * re-adjustment after every switch.
+ *
  * With no recorded usage, the sort degrades gracefully to the default
  * provider/model-id alphabetical order.
  */
@@ -25,8 +30,12 @@ import { join } from "node:path";
 import {
   buildModelKey,
   CONFIG_FILENAME,
+  createThinkingTracker,
+  handleModelSelect,
   type ModelSortConfig,
+  parseConfig,
   parseModelKey,
+  recordThinkingSelect,
   sortByLastUsed,
 } from "./src/index.js";
 
@@ -36,14 +45,13 @@ const CONFIG_PATH = join(getAgentDir(), "extensions", CONFIG_FILENAME);
 
 function readConfig(): ModelSortConfig {
   if (!existsSync(CONFIG_PATH)) {
-    return { lastUsed: {} };
+    return { lastUsed: {}, thinking: {} };
   }
   try {
     const raw = readFileSync(CONFIG_PATH, "utf-8");
-    const parsed = JSON.parse(raw) as ModelSortConfig;
-    return { lastUsed: parsed.lastUsed ?? {} };
+    return parseConfig(JSON.parse(raw));
   } catch {
-    return { lastUsed: {} };
+    return { lastUsed: {}, thinking: {} };
   }
 }
 
@@ -358,10 +366,14 @@ function findMruModel(
 
 export default function (pi: ExtensionAPI) {
   let lastUsed: Record<string, number> = {};
+  const tracker = createThinkingTracker();
 
   pi.on("session_start", async (event, ctx) => {
     const config = readConfig();
     lastUsed = config.lastUsed;
+    tracker.thinking = config.thinking;
+    tracker.activeKey = ctx.model ? buildModelKey(ctx.model.provider, ctx.model.id) : null;
+    tracker.sawSwitchClamp = false;
 
     patchRegistry(ctx.modelRegistry as unknown as PatchedRegistry, () => lastUsed);
     patchSortModels(() => lastUsed);
@@ -390,16 +402,40 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
+  // Record thinking levels per model. Pi emits this only when the effective
+  // level changes — for manual changes (Ctrl+T, /thinking) and for the
+  // re-clamp inside setModel/cycle, which runs before model_select fires.
+  pi.on("thinking_level_select", (event, ctx) => {
+    const currentKey = ctx.model ? buildModelKey(ctx.model.provider, ctx.model.id) : null;
+    if (recordThinkingSelect(tracker, currentKey, event.level, event.previousLevel)) {
+      writeConfig({ lastUsed, thinking: tracker.thinking });
+    }
+  });
+
   // Track model selections (manual, session restore).
-  // Skip "cycle" events — updating lastUsed during Ctrl+P cycling creates
-  // a feedback loop: each cycle step makes the selected model most-recent,
-  // re-sorts it to position 0, then (currentIndex + 1) % len always hits
-  // position 1 — toggling forever between the top 2.
+  // Skip lastUsed updates for "cycle" events — updating lastUsed during
+  // Ctrl+P cycling creates a feedback loop: each cycle step makes the
+  // selected model most-recent, re-sorts it to position 0, then
+  // (currentIndex + 1) % len always hits position 1 — toggling forever
+  // between the top 2. Thinking restore still applies to cycle selections.
   pi.on("model_select", async (event, _ctx) => {
-    if (event.source === "cycle") return;
-    const key = buildModelKey(event.model.provider, event.model.id);
-    lastUsed[key] = Date.now();
-    writeConfig({ lastUsed });
+    const newKey = buildModelKey(event.model.provider, event.model.id);
+    if (event.source !== "cycle") {
+      lastUsed[newKey] = Date.now();
+    }
+
+    const previousKey = event.previousModel
+      ? buildModelKey(event.previousModel.provider, event.previousModel.id)
+      : null;
+    const restoreLevel = handleModelSelect(tracker, newKey, previousKey, pi.getThinkingLevel());
+    writeConfig({ lastUsed, thinking: tracker.thinking });
+
+    // Restore the model's remembered thinking level. setThinkingLevel clamps
+    // to the model's capabilities; if clamping changes the level, the
+    // resulting thinking_level_select records the effective level instead.
+    if (restoreLevel !== null) {
+      pi.setThinkingLevel(restoreLevel);
+    }
   });
 
   // Cleanup on shutdown / reload
