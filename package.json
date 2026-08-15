@@ -1,6 +1,6 @@
 {
   "name": "pi-model-sort",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Sort models in pi's /model selector by last usage — most recently used models appear first",
   "type": "module",
   "author": "Tom X Nguyen",
