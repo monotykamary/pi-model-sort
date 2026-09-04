@@ -300,20 +300,20 @@ function unpatchRegistry(registry: PatchedRegistry): void {
 
 type ScopedModelEntry = { model: { provider: string; id: string }; thinkingLevel?: string };
 
-let origCycleScopedModel: ((direction: string) => Promise<unknown>) | null = null;
+let origCycleScopedModel: ((this: Record<string, unknown>, ...args: unknown[]) => Promise<unknown>) | null = null;
 
 function patchCycleScopedModel(getLastUsed: () => Record<string, number>): void {
   if (origCycleScopedModel !== null) return;
 
   const proto = AgentSession.prototype as unknown as Record<string, unknown>;
-  origCycleScopedModel = proto._cycleScopedModel as (direction: string) => Promise<unknown>;
+  origCycleScopedModel = proto._cycleScopedModel as (this: Record<string, unknown>, ...args: unknown[]) => Promise<unknown>;
 
-  proto._cycleScopedModel = async function (this: Record<string, unknown>, direction: string) {
+  proto._cycleScopedModel = async function (this: Record<string, unknown>, direction: string, ...rest: unknown[]) {
     const lastUsed = getLastUsed();
     const origScoped = this._scopedModels as ScopedModelEntry[] | undefined;
 
     if (!origScoped || origScoped.length <= 1) {
-      return origCycleScopedModel!.call(this, direction);
+      return origCycleScopedModel!.apply(this, [direction, ...rest]);
     }
 
     // Sort by last-used without mutating the session's stored order.
@@ -329,7 +329,7 @@ function patchCycleScopedModel(getLastUsed: () => Record<string, number>): void 
     // Temporarily swap for the cycle lookup, restore afterward.
     this._scopedModels = sorted;
     try {
-      return await origCycleScopedModel!.call(this, direction);
+      return await origCycleScopedModel!.apply(this, [direction, ...rest]);
     } finally {
       this._scopedModels = origScoped;
     }
