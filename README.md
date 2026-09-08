@@ -23,12 +23,12 @@ Pi's `/model` selector sorts models alphabetically by provider. If you have Anth
 
 - **Automatic tracking** — every `/model` switch, `Ctrl+P` cycle, and session restore is recorded with a Unix timestamp
 - **Sort order** — current model first → most recently used descending → provider/id alphabetical fallback
-- **MRU on startup** — new sessions start on your most recently used model instead of `scopedModels[0]` or the hardcoded provider default order
+- **MRU on interactive startup** — unspecified TUI sessions start on your most recently used authenticated model within the configured scope. Explicit model/provider/scope/thinking and restored-session selections always win.
 - **Per-model thinking levels** — remembers the thinking level you last used on each model and restores it on every switch (`/model`, `Ctrl+P`, session restore), clamped to what each model supports
 - **Persistent** — usage data lives in `~/.pi/agent/extensions/pi-model-sort.json`, survives restarts
 - **No config needed** — install and forget; the extension starts tracking on first use
 - **Zero setup** — with no recorded usage, models fall back to the default alphabetical order
-- **Everywhere** — the sort applies to `/model` (`Ctrl+L`), both "Scope: all" and "Scope: scoped" views, `--list-models` CLI, and the `/scoped-models` config selector
+- **Interactive pickers** — the sort applies to `/model` (`Ctrl+L`), both "Scope: all" and "Scope: scoped" views, and the `/scoped-models` config selector
 
 No `settings.json` modifications. No manual maintenance. No database.
 
@@ -40,10 +40,15 @@ The extension works automatically — there are no commands to learn.
 # Install, then just use pi normally
 /model                    # Most recently used models appear at the top
 Ctrl+P / Ctrl+Shift+P     # Cycle through models in last-used order
-pi --list-models          # CLI output is also sorted by last usage
 ```
 
 Open `/model` and press `Tab` to switch between "Scope: all" and "Scope: scoped" — both views are sorted by recency.
+
+### Model selection authority
+
+MRU selection is an interactive default, not permission to replace a caller's model. Explicit `--model`, `--provider`, `--models`, `--thinking`, and session restore/continue/fork flags suppress startup MRU selection (including `--flag=value` forms). Resume, reload, and fork lifecycle events never select MRU. Candidates must remain within the session's configured model scope.
+
+RPC, print, JSON, SDK/non-TUI sessions, and Fabric workers do not apply MRU model selection or remembered thinking levels, patch their registries, or write interactive usage history. In particular, `ctx.hasUI` is not an interactive-mode test: Pi RPC also exposes UI methods. Interactive sessions keep picker sorting and per-model thinking memory.
 
 ### Config File
 
@@ -127,13 +132,14 @@ Session starts (startup / new)
       sortModels — sorts "Scope: all" view
       loadModelsFromSnapshot — sorts "Scope: scoped" scopedModelItems after load
         (loadModels on pi <= 0.80.3; renamed/split in 0.80.8)
-  → Monkey-patches ModelRegistry.prototype.getAvailable/getAll
+  → Patches the interactive ModelRegistry instance getAvailable/getAll
   → Monkey-patches AgentSession.prototype._cycleScopedModel
   → Sort order: current model first → most recent → provider/id alphabetical
   → Patches survive modelRegistry.refresh()
   → Overrides initial model to MRU via pi.setModel()
       if pi core chose a different model (scopedModels[0], defaultModelPerProvider)
-      only on startup and new session starts — not resume, reload, or fork
+      only on unspecified TUI startup/new sessions, within the configured scope
+      never for explicit CLI selection, resumed sessions, RPC/print/JSON/SDK, or Fabric workers
 ```
 
 **Five patches + MRU startup override, full coverage:**
@@ -143,9 +149,9 @@ Session starts (startup / new)
 | `ModelSelectorComponent.prototype.sortModels` | `/model` TUI picker — "Scope: all" view |
 | `ModelSelectorComponent.prototype.loadModelsFromSnapshot` (or `loadModels` on older pi) | `/model` TUI picker — "Scope: scoped" view (configured cycling models) |
 | `AgentSession.prototype._cycleScopedModel` | `Ctrl+P` / `Ctrl+Shift+P` cycling order (non-destructive swap, cycling does not update last-used to avoid feedback loop) |
-| `ModelRegistry.prototype.getAvailable()` | `/scoped-models` config selector, model resolution |
-| `ModelRegistry.prototype.getAll()` | `--list-models` CLI output |
-| `pi.setModel()` on `session_start` | MRU model selection on startup and `/new` — overrides pi core's default |
+| `ModelRegistry.getAvailable()` | Interactive `/scoped-models` config selector |
+| `ModelRegistry.getAll()` | Interactive catalogue enumeration |
+| `pi.setModel()` on `session_start` | MRU default only for unspecified interactive startup and `/new` |
 
 When no scoped models are configured, Ctrl+P falls through to `_cycleAvailableModel` which calls `getAvailable()` — already sorted by the registry patch.
 

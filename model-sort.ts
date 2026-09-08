@@ -39,6 +39,8 @@ import {
   sortByLastUsed,
 } from "./src/index.js";
 
+import { isInteractiveModelSession, shouldSelectMru } from "./src/session-policy.js";
+
 const CONFIG_PATH = join(getAgentDir(), "extensions", CONFIG_FILENAME);
 
 // Config I/O
@@ -348,12 +350,14 @@ function unpatchCycleScopedModel(): void {
 function findMruModel(
   lastUsed: Record<string, number>,
   registry: { find(provider: string, modelId: string): unknown; hasConfiguredAuth(model: unknown): boolean },
+  scopedModels: readonly { model: { provider: string; id: string } }[] = [],
 ): unknown | undefined {
   const sorted = Object.entries(lastUsed).sort(([, a], [, b]) => b - a);
   for (const [key] of sorted) {
     const parsed = parseModelKey(key);
     if (!parsed) continue;
     const [provider, modelId] = parsed;
+    if (scopedModels.length > 0 && !scopedModels.some(({ model }) => model.provider === provider && model.id === modelId)) continue;
     const model = registry.find(provider, modelId);
     if (model && registry.hasConfiguredAuth(model)) {
       return model;
@@ -367,29 +371,30 @@ function findMruModel(
 export default function (pi: ExtensionAPI) {
   let lastUsed: Record<string, number> = {};
   const tracker = createThinkingTracker();
+  let patchedRegistry: PatchedRegistry | undefined;
 
   pi.on("session_start", async (event, ctx) => {
+    if (!isInteractiveModelSession(ctx.mode, process.env.PI_FABRIC_PARENT_RUN)) return;
     const config = readConfig();
     lastUsed = config.lastUsed;
     tracker.thinking = config.thinking;
     tracker.activeKey = ctx.model ? buildModelKey(ctx.model.provider, ctx.model.id) : null;
     tracker.sawSwitchClamp = false;
 
-    patchRegistry(ctx.modelRegistry as unknown as PatchedRegistry, () => lastUsed);
+    patchedRegistry = ctx.modelRegistry as unknown as PatchedRegistry;
+    patchRegistry(patchedRegistry, () => lastUsed);
     patchSortModels(() => lastUsed);
     patchScopedLoader(() => lastUsed);
     patchFilterModels(() => lastUsed);
     patchCycleScopedModel(() => lastUsed);
 
-    // Override initial model to MRU on new sessions.
-    // Pi core picks the saved default if in scope, otherwise scopedModels[0].
-    // This hijack switches to the most recently used model instead, so your
-    // actual usage history determines the default — not alphabetical scope order.
+    // MRU is an interactive default, never an override of an explicit model,
+    // restored session, scoped launch, or headless/SDK caller selection.
     if (
-      (event.reason === "startup" || event.reason === "new") &&
+      shouldSelectMru(ctx.mode, event.reason, process.argv.slice(2), process.env.PI_FABRIC_PARENT_RUN) &&
       Object.keys(lastUsed).length > 0
     ) {
-      const mruModel = findMruModel(lastUsed, ctx.modelRegistry);
+      const mruModel = findMruModel(lastUsed, ctx.modelRegistry, ctx.scopedModels);
       const currentModel = ctx.model as { provider: string; id: string } | undefined;
       if (
         mruModel &&
@@ -406,6 +411,7 @@ export default function (pi: ExtensionAPI) {
   // level changes — for manual changes (Ctrl+T, /thinking) and for the
   // re-clamp inside setModel/cycle, which runs before model_select fires.
   pi.on("thinking_level_select", (event, ctx) => {
+    if (!isInteractiveModelSession(ctx.mode, process.env.PI_FABRIC_PARENT_RUN)) return;
     const currentKey = ctx.model ? buildModelKey(ctx.model.provider, ctx.model.id) : null;
     if (recordThinkingSelect(tracker, currentKey, event.level, event.previousLevel)) {
       writeConfig({ lastUsed, thinking: tracker.thinking });
@@ -418,7 +424,8 @@ export default function (pi: ExtensionAPI) {
   // selected model most-recent, re-sorts it to position 0, then
   // (currentIndex + 1) % len always hits position 1 — toggling forever
   // between the top 2. Thinking restore still applies to cycle selections.
-  pi.on("model_select", async (event, _ctx) => {
+  pi.on("model_select", async (event, ctx) => {
+    if (!isInteractiveModelSession(ctx.mode, process.env.PI_FABRIC_PARENT_RUN)) return;
     const newKey = buildModelKey(event.model.provider, event.model.id);
     if (event.source !== "cycle") {
       lastUsed[newKey] = Date.now();
@@ -440,6 +447,9 @@ export default function (pi: ExtensionAPI) {
 
   // Cleanup on shutdown / reload
   pi.on("session_shutdown", () => {
+    if (!patchedRegistry) return;
+    unpatchRegistry(patchedRegistry);
+    patchedRegistry = undefined;
     unpatchSortModels();
     unpatchScopedLoader();
     unpatchFilterModels();
