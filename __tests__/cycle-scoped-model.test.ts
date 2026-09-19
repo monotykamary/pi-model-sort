@@ -88,7 +88,12 @@ beforeAll(async () => {
   };
 
   factory(pi);
-  await handlers.get("session_start")!({ reason: "startup" }, { modelRegistry, model: undefined });
+  // The extension only patches interactive sessions (session-policy gate).
+  delete process.env.PI_FABRIC_PARENT_RUN;
+  await handlers.get("session_start")!(
+    { reason: "startup" },
+    { mode: "tui", modelRegistry, model: undefined },
+  );
 });
 
 async function createSession(scoped: Array<{ provider: string; id: string }>) {
