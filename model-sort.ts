@@ -40,6 +40,7 @@ import {
 } from "./src/index.js";
 
 import { isInteractiveModelSession, shouldSelectMru } from "./src/session-policy.js";
+import { installMethodPatch } from "./src/method-patch.js";
 
 const CONFIG_PATH = join(getAgentDir(), "extensions", CONFIG_FILENAME);
 
@@ -113,6 +114,7 @@ function unpatchSortModels(): void {
 
 let origScopedLoader: ((this: unknown) => unknown) | null = null;
 let scopedLoaderName: string | null = null;
+let restoreScopedLoader: (() => void) | undefined;
 
 function sortScopedItems(instance: Record<string, unknown>, getLastUsed: () => Record<string, number>): void {
   const scopedItems = instance.scopedModelItems as
@@ -153,10 +155,10 @@ function patchScopedLoader(getLastUsed: () => Record<string, number>): void {
   if (typeof proto.loadModelsFromSnapshot === "function") {
     origScopedLoader = proto.loadModelsFromSnapshot as (this: unknown) => unknown;
     scopedLoaderName = "loadModelsFromSnapshot";
-    proto.loadModelsFromSnapshot = function (this: Record<string, unknown>) {
-      origScopedLoader!.call(this);
+    restoreScopedLoader = installMethodPatch(proto, "loadModelsFromSnapshot", function (original) {
+      original.call(this);
       sortScopedItems(this, getLastUsed);
-    };
+    });
     return;
   }
 
@@ -164,16 +166,17 @@ function patchScopedLoader(getLastUsed: () => Record<string, number>): void {
   if (typeof proto.loadModels === "function") {
     origScopedLoader = proto.loadModels as (this: unknown) => unknown;
     scopedLoaderName = "loadModels";
-    proto.loadModels = async function (this: Record<string, unknown>) {
-      await origScopedLoader!.call(this);
+    restoreScopedLoader = installMethodPatch(proto, "loadModels", async function (original) {
+      await original.call(this);
       sortScopedItems(this, getLastUsed);
-    };
+    });
   }
 }
 
 function unpatchScopedLoader(): void {
   if (origScopedLoader === null || scopedLoaderName === null) return;
-  (ModelSelectorComponent.prototype as unknown as Record<string, unknown>)[scopedLoaderName] = origScopedLoader;
+  restoreScopedLoader?.();
+  restoreScopedLoader = undefined;
   origScopedLoader = null;
   scopedLoaderName = null;
 }
@@ -241,58 +244,38 @@ function unpatchFilterModels(): void {
   origFilterModels = null;
 }
 
-// ModelRegistry getAvailable / getAll patch
-
-const REGISTRY_PATCH_KEY = "__model_sort_registry_patched";
-
+// Pi 0.99 selectors and unscoped cycling read ModelRuntime, not its legacy
+// ModelRegistry facade. Sort the actual runtime accessors, preserving auth options.
 interface PatchedRegistry {
-  [REGISTRY_PATCH_KEY]: boolean;
+  runtime?: object;
   getAvailable(): unknown[];
   getAll(): unknown[];
-  __model_sort_get_last_used: () => Record<string, number>;
-  __model_sort_orig_getAvailable: () => unknown[];
-  __model_sort_orig_getAll: () => unknown[];
 }
-
-function patchRegistry(
-  registry: PatchedRegistry,
-  getLastUsed: () => Record<string, number>,
-): void {
-  if (registry[REGISTRY_PATCH_KEY]) {
-    registry.__model_sort_get_last_used = getLastUsed;
-    return;
+const registryPatches = new WeakMap<object, { getLastUsed: () => Record<string, number>; restores: Array<() => void> }>();
+function patchRegistry(registry: PatchedRegistry, getLastUsed: () => Record<string, number>): void {
+  const target = registry.runtime ?? registry;
+  const existing = registryPatches.get(target);
+  if (existing) { existing.getLastUsed = getLastUsed; return; }
+  const state = { getLastUsed, restores: [] as Array<() => void> };
+  const sorted = (models: Array<{ provider: string; id: string }>) => sortByLastUsed(models, state.getLastUsed(), null);
+  for (const name of registry.runtime ? ["getModels", "getAvailableSnapshot"] : ["getAll", "getAvailable"]) {
+    state.restores.push(installMethodPatch(target, name, function (original, ...args) {
+      return sorted(original.apply(this, args));
+    }));
   }
-
-  registry[REGISTRY_PATCH_KEY] = true;
-  registry.__model_sort_get_last_used = getLastUsed;
-
-  registry.__model_sort_orig_getAvailable = registry.getAvailable.bind(registry);
-  registry.__model_sort_orig_getAll = registry.getAll.bind(registry);
-
-  registry.getAvailable = function (this: PatchedRegistry) {
-    const lastUsed = this.__model_sort_get_last_used();
-    const all = this.__model_sort_orig_getAvailable() as Array<{ provider: string; id: string }>;
-    return sortByLastUsed(all, lastUsed, null);
-  };
-
-  registry.getAll = function (this: PatchedRegistry) {
-    const lastUsed = this.__model_sort_get_last_used();
-    const all = this.__model_sort_orig_getAll() as Array<{ provider: string; id: string }>;
-    return sortByLastUsed(all, lastUsed, null);
-  };
+  if (registry.runtime && typeof (target as any).getAvailable === "function") {
+    state.restores.push(installMethodPatch(target, "getAvailable", async function (original, ...args) {
+      return sorted(await original.apply(this, args));
+    }));
+  }
+  registryPatches.set(target, state);
 }
-
 function unpatchRegistry(registry: PatchedRegistry): void {
-  if (!registry[REGISTRY_PATCH_KEY]) return;
-
-  registry.getAvailable = registry.__model_sort_orig_getAvailable;
-  registry.getAll = registry.__model_sort_orig_getAll;
-
-  const raw = registry as unknown as Record<string, unknown>;
-  delete raw[REGISTRY_PATCH_KEY];
-  delete raw.__model_sort_get_last_used;
-  delete raw.__model_sort_orig_getAvailable;
-  delete raw.__model_sort_orig_getAll;
+  const target = registry.runtime ?? registry;
+  const state = registryPatches.get(target);
+  if (!state) return;
+  for (const restore of state.restores.reverse()) restore();
+  registryPatches.delete(target);
 }
 
 // AgentSession _cycleScopedModel patch — sorts the scoped models list
@@ -310,12 +293,13 @@ function patchCycleScopedModel(getLastUsed: () => Record<string, number>): void 
   const proto = AgentSession.prototype as unknown as Record<string, unknown>;
   origCycleScopedModel = proto._cycleScopedModel as (this: Record<string, unknown>, ...args: unknown[]) => Promise<unknown>;
 
+  const original = origCycleScopedModel;
   proto._cycleScopedModel = async function (this: Record<string, unknown>, direction: string, ...rest: unknown[]) {
     const lastUsed = getLastUsed();
     const origScoped = this._scopedModels as ScopedModelEntry[] | undefined;
 
     if (!origScoped || origScoped.length <= 1) {
-      return origCycleScopedModel!.apply(this, [direction, ...rest]);
+      return original.apply(this, [direction, ...rest]);
     }
 
     // Sort by last-used without mutating the session's stored order.
@@ -331,7 +315,9 @@ function patchCycleScopedModel(getLastUsed: () => Record<string, number>): void 
     // Temporarily swap for the cycle lookup, restore afterward.
     this._scopedModels = sorted;
     try {
-      return await origCycleScopedModel!.apply(this, [direction, ...rest]);
+      // Native 0.99 finishes its lookup before awaiting model_select handlers.
+      // Restore now, so async handlers and a concurrent cycle see the real scope.
+      return original.apply(this, [direction, ...rest]);
     } finally {
       this._scopedModels = origScoped;
     }

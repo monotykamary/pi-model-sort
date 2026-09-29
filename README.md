@@ -132,7 +132,7 @@ Session starts (startup / new)
       sortModels — sorts "Scope: all" view
       loadModelsFromSnapshot — sorts "Scope: scoped" scopedModelItems after load
         (loadModels on pi <= 0.80.3; renamed/split in 0.80.8)
-  → Patches the interactive ModelRegistry instance getAvailable/getAll
+  → Patches the interactive ModelRuntime getModels/getAvailableSnapshot/getAvailable (legacy ModelRegistry fallback)
   → Monkey-patches AgentSession.prototype._cycleScopedModel
   → Sort order: current model first → most recent → provider/id alphabetical
   → Patches survive modelRegistry.refresh()
@@ -197,3 +197,9 @@ npm run lint:dead # Dead code detection (knip)
 ## License
 
 MIT
+
+## Pi 0.99 compatibility (0.3.10)
+
+Sorts the actual 0.99 ModelRuntime availability paths, including unscoped cycling. Scoped cycling forwards native options and restores temporary order before asynchronous model-selection handlers. Scoped selector patches compose with provider filtering.
+
+Tested with Pi 0.99.0. Host-provided Pi packages are wildcard peers, not bundled dependencies; development uses exact 0.99.0 versions.

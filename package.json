@@ -1,6 +1,6 @@
 {
   "name": "pi-model-sort",
-  "version": "0.3.9",
+  "version": "0.3.10",
   "description": "Sort models in pi's /model selector by last usage — most recently used models appear first",
   "type": "module",
   "author": "Tom X Nguyen",
@@ -37,16 +37,21 @@
     "lint:dead": "knip --no-gitignore"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "0.87.0",
+    "@earendil-works/pi-coding-agent": "0.99.0",
     "@types/node": "25.9.1",
     "@vitest/coverage-v8": "4.1.7",
     "knip": "6.14.1",
     "typescript": "6.0.3",
-    "vitest": "4.1.7"
+    "vitest": "4.1.7",
+    "@earendil-works/pi-tui": "0.99.0"
   },
   "pi": {
     "extensions": [
       "./model-sort.ts"
     ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
   }
 }
