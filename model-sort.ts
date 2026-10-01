@@ -244,7 +244,7 @@ function unpatchFilterModels(): void {
   origFilterModels = null;
 }
 
-// Pi 0.99 selectors and unscoped cycling read ModelRuntime, not its legacy
+// Pi 1.0 selectors and unscoped cycling read ModelRuntime, not its legacy
 // ModelRegistry facade. Sort the actual runtime accessors, preserving auth options.
 interface PatchedRegistry {
   runtime?: object;
@@ -315,7 +315,7 @@ function patchCycleScopedModel(getLastUsed: () => Record<string, number>): void 
     // Temporarily swap for the cycle lookup, restore afterward.
     this._scopedModels = sorted;
     try {
-      // Native 0.99 finishes its lookup before awaiting model_select handlers.
+      // Native 1.0 finishes its lookup before awaiting model_select handlers.
       // Restore now, so async handlers and a concurrent cycle see the real scope.
       return original.apply(this, [direction, ...rest]);
     } finally {

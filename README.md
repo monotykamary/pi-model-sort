@@ -198,6 +198,13 @@ npm run lint:dead # Dead code detection (knip)
 
 MIT
 
+## Pi 1.0 compatibility (0.3.11)
+
+Tested against Pi **1.0.0** with exact SDK development pins and wildcard host peers.
+Native runtime availability, selector sorting, scoped cycling and prototype cleanup are verified.
+
+Run `bun run test:host` for the offline real-host regression. Set `PI1_HOST_PACKAGE` to an installed Pi package directory and `PI1_HOST_ENTRY=bundle` to test its bundled CLI runtime.
+
 ## Pi 0.99 compatibility (0.3.10)
 
 Sorts the actual 0.99 ModelRuntime availability paths, including unscoped cycling. Scoped cycling forwards native options and restores temporary order before asynchronous model-selection handlers. Scoped selector patches compose with provider filtering.
