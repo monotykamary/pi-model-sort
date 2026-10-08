@@ -22,9 +22,9 @@ beforeAll(async () => {
   await handlers.get("session_start")({ reason: "reload" }, { mode: "tui", modelRegistry: new ModelRegistry(runtime), model: models[0] });
 });
 afterAll(async () => { await handlers.get("session_shutdown")?.(); vi.unstubAllEnvs(); rmSync(root, { recursive: true, force: true }); });
-describe("actual Pi 1.0 runtime", () => {
+describe("actual Pi 1.1.0 runtime", () => {
   it("sorts the actual availability path used by unscoped cycling", async () => {
-    expect(VERSION).toBe("1.0.0");
+    expect(VERSION).toBe("1.1.0");
     expect(runtime.getAvailableSnapshot()).toEqual([...models].reverse());
     expect(await runtime.getAvailable()).toEqual([...models].reverse());
   });
