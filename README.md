@@ -24,7 +24,7 @@ Pi's `/model` selector sorts models alphabetically by provider. If you have Anth
 - **Automatic tracking** — every `/model` switch, `Ctrl+P` cycle, and session restore is recorded with a Unix timestamp
 - **Sort order** — current model first → most recently used descending → provider/id alphabetical fallback
 - **MRU on interactive startup** — unspecified TUI sessions start on your most recently used authenticated model within the configured scope. Explicit model/provider/scope/thinking and restored-session selections always win.
-- **Per-model thinking levels** — remembers the thinking level you last used on each model and restores it on every switch (`/model`, `Ctrl+P`, session restore), clamped to what each model supports
+- **Per-model thinking levels** — remembers the thinking level you last used on each model and restores it on every switch (`/model`, `Ctrl+P`) and on unspecified interactive startup, clamped to what each model supports
 - **Persistent** — usage data lives in `~/.pi/agent/extensions/pi-model-sort.json`, survives restarts
 - **No config needed** — install and forget; the extension starts tracking on first use
 - **Zero setup** — with no recorded usage, models fall back to the default alphabetical order
@@ -46,7 +46,7 @@ Open `/model` and press `Tab` to switch between "Scope: all" and "Scope: scoped"
 
 ### Model selection authority
 
-MRU selection is an interactive default, not permission to replace a caller's model. Explicit `--model`, `--provider`, `--models`, `--thinking`, and session restore/continue/fork flags suppress startup MRU selection (including `--flag=value` forms). Resume, reload, and fork lifecycle events never select MRU. Candidates must remain within the session's configured model scope.
+MRU selection is an interactive default, not permission to replace a caller's model. Explicit `--model`, `--provider`, `--models`, `--thinking`, and session restore/continue/fork flags suppress startup MRU selection and the startup thinking restore (including `--flag=value` forms). Resume, reload, and fork lifecycle events never select MRU or replace the session's thinking level. Candidates must remain within the session's configured model scope.
 
 RPC, print, JSON, SDK/non-TUI sessions, and Fabric workers do not apply MRU model selection or remembered thinking levels, patch their registries, or write interactive usage history. In particular, `ctx.hasUI` is not an interactive-mode test: Pi RPC also exposes UI methods. Interactive sessions keep picker sorting and per-model thinking memory.
 
@@ -76,6 +76,7 @@ Pi keeps one global thinking level: switching models carries the current level o
 
 - Change the level with `Ctrl+T` or `/thinking` — it's recorded for the active model
 - Switch models — the model's last-used level is restored (including when cycling with `Ctrl+P`)
+- Start pi or `/new` without model/thinking flags — the startup model's last-used level is restored, even when Pi already picked your most recently used model
 - The restored level is clamped to what the model supports, so a `max` remembered for one model can never push a claude model past `high`
 
 Example: deepseek-v4-flash stays on `max`, luna on `xhigh`, claude models on `high` — set each once and every switch lands on the right level.
@@ -140,6 +141,8 @@ Session starts (startup / new)
       if pi core chose a different model (scopedModels[0], defaultModelPerProvider)
       only on unspecified TUI startup/new sessions, within the configured scope
       never for explicit CLI selection, resumed sessions, RPC/print/JSON/SDK, or Fabric workers
+  → Otherwise restores the startup model's remembered thinking level via pi.setThinkingLevel()
+      (Pi emits no model_select for its initial model; same conditions as the MRU override)
 ```
 
 **Five patches + MRU startup override, full coverage:**
@@ -152,6 +155,7 @@ Session starts (startup / new)
 | `ModelRegistry.getAvailable()` | Interactive `/scoped-models` config selector |
 | `ModelRegistry.getAll()` | Interactive catalogue enumeration |
 | `pi.setModel()` on `session_start` | MRU default only for unspecified interactive startup and `/new` |
+| `pi.setThinkingLevel()` on `session_start` | Remembered thinking level when the startup model is kept (same conditions) |
 
 When no scoped models are configured, Ctrl+P falls through to `_cycleAvailableModel` which calls `getAvailable()` — already sorted by the registry patch.
 

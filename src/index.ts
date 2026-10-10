@@ -109,10 +109,11 @@ export function sortByLastUsed<T extends { provider: string; id: string }>(
 /**
  * Per-model thinking-level memory.
  *
- * Pi keeps one global thinking level: on every model switch it carries the
- * current level over and clamps it to the new model's capabilities, so each
- * model needs manual re-adjustment. This tracker records the last level used
- * per model and computes which level to restore on switch.
+ * On every model switch Pi applies its configured level (modelThinkingLevels,
+ * then defaultThinkingLevel, else it carries the current level over) and
+ * clamps it to the new model's capabilities. None of that reflects the level
+ * last used on the model. This tracker records the last level used per model
+ * and computes which level to restore on switch.
  *
  * Attribution relies on pi's event ordering: setModel/cycle swap the model
  * and re-clamp the level (emitting thinking_level_select) *before* emitting
@@ -128,10 +129,15 @@ export interface ThinkingTrackerState {
   activeKey: string | null;
   /** Whether a switch-time re-clamp fired since the last model_select. */
   sawSwitchClamp: boolean;
+  /**
+   * Whether the active model's level is Pi's startup choice for a model the
+   * user never ran (it is being replaced by the MRU). Not recorded on switch.
+   */
+  inheritedLevel: boolean;
 }
 
 export function createThinkingTracker(): ThinkingTrackerState {
-  return { thinking: {}, activeKey: null, sawSwitchClamp: false };
+  return { thinking: {}, activeKey: null, sawSwitchClamp: false, inheritedLevel: false };
 }
 
 function recordLevel(state: ThinkingTrackerState, key: string, level: ThinkingLevel): boolean {
@@ -152,10 +158,11 @@ export function recordThinkingSelect(
 ): boolean {
   if (currentKey !== null && state.activeKey !== null && currentKey !== state.activeKey) {
     state.sawSwitchClamp = true;
-    return recordLevel(state, state.activeKey, previousLevel);
+    return state.inheritedLevel ? false : recordLevel(state, state.activeKey, previousLevel);
   }
   const key = currentKey ?? state.activeKey;
   if (key === null) return false;
+  state.inheritedLevel = false;
   return recordLevel(state, key, level);
 }
 
@@ -165,6 +172,8 @@ export function recordThinkingSelect(
  * Sets activeKey to newKey — callers must apply the returned level afterwards
  * (via pi.setThinkingLevel) so the emitted thinking_level_select attributes
  * the effective, possibly further-clamped level to the new model.
+ * At interactive startup, where Pi emits no model_select for its initial
+ * model, call it with previousKey null to restore that model's level.
  */
 export function handleModelSelect(
   state: ThinkingTrackerState,
@@ -175,10 +184,11 @@ export function handleModelSelect(
   // No re-clamp during the switch means the level carried over unchanged, so
   // currentLevel is also the previous model's final level. When a re-clamp did
   // fire, recordThinkingSelect already stored the previous model's level.
-  if (previousKey !== null && !state.sawSwitchClamp) {
+  if (previousKey !== null && !state.sawSwitchClamp && !state.inheritedLevel) {
     recordLevel(state, previousKey, currentLevel);
   }
   state.sawSwitchClamp = false;
+  state.inheritedLevel = false;
   state.activeKey = newKey;
 
   const remembered = state.thinking[newKey];

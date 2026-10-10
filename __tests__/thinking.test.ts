@@ -161,6 +161,44 @@ describe("handleModelSelect", () => {
     expect(state.activeKey).toBe(DEEPSEEK);
   });
 
+  it("does not record an inherited startup level for the replaced model", () => {
+    const state = createThinkingTracker();
+    state.activeKey = CLAUDE;
+    state.thinking[CLAUDE] = "high";
+    state.inheritedLevel = true;
+    // Switch re-clamp: previousLevel is Pi's startup level, not a preference.
+    expect(recordThinkingSelect(state, DEEPSEEK, "low", "medium")).toBe(false);
+    handleModelSelect(state, DEEPSEEK, CLAUDE, "low");
+    expect(state.thinking[CLAUDE]).toBe("high");
+    expect(state.inheritedLevel).toBe(false);
+  });
+
+  it("does not record an inherited startup level that carried over unchanged", () => {
+    const state = createThinkingTracker();
+    state.activeKey = CLAUDE;
+    state.inheritedLevel = true;
+    handleModelSelect(state, DEEPSEEK, CLAUDE, "medium");
+    expect(state.thinking).toEqual({});
+    expect(state.inheritedLevel).toBe(false);
+  });
+
+  it("records a manual change made before leaving an inherited level", () => {
+    const state = createThinkingTracker();
+    state.activeKey = CLAUDE;
+    state.inheritedLevel = true;
+    recordThinkingSelect(state, CLAUDE, "high", "medium");
+    handleModelSelect(state, DEEPSEEK, CLAUDE, "high");
+    expect(state.thinking[CLAUDE]).toBe("high");
+  });
+
+  it("restores the startup model's level when called with no previous model", () => {
+    const state = createThinkingTracker();
+    state.activeKey = CLAUDE;
+    state.thinking[CLAUDE] = "high";
+    expect(handleModelSelect(state, CLAUDE, null, "medium")).toBe("high");
+    expect(state.thinking[CLAUDE]).toBe("high");
+  });
+
   it("handles a first selection with no previous model", () => {
     const state = createThinkingTracker();
     const restore = handleModelSelect(state, CLAUDE, null, "medium");

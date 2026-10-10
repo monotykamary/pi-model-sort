@@ -15,9 +15,9 @@
  * ~/.pi/agent/extensions/pi-model-sort.json.
  *
  * It also remembers the thinking level last used on each model and restores
- * it on every switch (including Ctrl+P cycling), clamped to what the model
- * supports — deepseek stays on max, claude on high, without manual
- * re-adjustment after every switch.
+ * it on every switch (including Ctrl+P cycling) and on unspecified
+ * interactive startup, clamped to what the model supports — deepseek stays
+ * on max, claude on high, without manual re-adjustment after every switch.
  *
  * With no recorded usage, the sort degrades gracefully to the default
  * provider/model-id alphabetical order.
@@ -366,6 +366,7 @@ export default function (pi: ExtensionAPI) {
     tracker.thinking = config.thinking;
     tracker.activeKey = ctx.model ? buildModelKey(ctx.model.provider, ctx.model.id) : null;
     tracker.sawSwitchClamp = false;
+    tracker.inheritedLevel = false;
 
     patchedRegistry = ctx.modelRegistry as unknown as PatchedRegistry;
     patchRegistry(patchedRegistry, () => lastUsed);
@@ -374,22 +375,29 @@ export default function (pi: ExtensionAPI) {
     patchFilterModels(() => lastUsed);
     patchCycleScopedModel(() => lastUsed);
 
-    // MRU is an interactive default, never an override of an explicit model,
-    // restored session, scoped launch, or headless/SDK caller selection.
-    if (
-      shouldSelectMru(ctx.mode, event.reason, process.argv.slice(2), process.env.PI_FABRIC_PARENT_RUN) &&
-      Object.keys(lastUsed).length > 0
-    ) {
-      const mruModel = findMruModel(lastUsed, ctx.modelRegistry, ctx.scopedModels);
-      const currentModel = ctx.model as { provider: string; id: string } | undefined;
-      if (
-        mruModel &&
-        (!currentModel ||
-          currentModel.provider !== (mruModel as { provider: string }).provider ||
-          currentModel.id !== (mruModel as { id: string }).id)
-      ) {
-        await pi.setModel(mruModel as Parameters<typeof pi.setModel>[0]);
-      }
+    // MRU and remembered thinking are interactive defaults, never an override
+    // of an explicit model/thinking, restored session, scoped launch, or
+    // headless/SDK caller selection.
+    if (!shouldSelectMru(ctx.mode, event.reason, process.argv.slice(2), process.env.PI_FABRIC_PARENT_RUN)) return;
+
+    const mruModel = Object.keys(lastUsed).length > 0
+      ? findMruModel(lastUsed, ctx.modelRegistry, ctx.scopedModels) as { provider: string; id: string } | undefined
+      : undefined;
+    const currentModel = ctx.model as { provider: string; id: string } | undefined;
+    if (mruModel && (currentModel?.provider !== mruModel.provider || currentModel?.id !== mruModel.id)) {
+      // Pi's startup model and level are replaced unused: do not record that
+      // level as the outgoing model's preference. model_select restores the
+      // MRU's remembered level.
+      tracker.inheritedLevel = true;
+      if (await pi.setModel(mruModel as Parameters<typeof pi.setModel>[0])) return;
+    }
+
+    // Pi selects the initial model and level before session_start and emits
+    // no model_select for it, so restore the startup model's level here.
+    if (!ctx.model) return;
+    const restoreLevel = handleModelSelect(tracker, buildModelKey(ctx.model.provider, ctx.model.id), null, pi.getThinkingLevel());
+    if (restoreLevel !== null) {
+      pi.setThinkingLevel(restoreLevel);
     }
   });
 
