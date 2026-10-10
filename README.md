@@ -72,14 +72,35 @@ No manual editing needed. To clear usage history, delete the file and `/reload`.
 
 ### Per-Model Thinking Levels
 
-Pi keeps one global thinking level: switching models carries the current level over and clamps it to the new model, so you have to re-adjust it after every switch. This extension learns your per-model preference automatically:
+When you switch models, Pi picks the new model's level from its settings — `modelThinkingLevels["provider/model"]`, else `defaultThinkingLevel`, else the current level carried over — and clamps it to the model. Those are configured defaults, not the level you last used on that model. This extension learns your per-model preference automatically:
 
-- Change the level with `Ctrl+T` or `/thinking` — it's recorded for the active model
+- Change the level with `Shift+Tab` or `/thinking` — it's recorded for the active model
 - Switch models — the model's last-used level is restored (including when cycling with `Ctrl+P`)
 - Start pi or `/new` without model/thinking flags — the startup model's last-used level is restored, even when Pi already picked your most recently used model
 - The restored level is clamped to what the model supports, so a `max` remembered for one model can never push a claude model past `high`
 
 Example: deepseek-v4-flash stays on `max`, luna on `xhigh`, claude models on `high` — set each once and every switch lands on the right level.
+
+#### Interaction with Pi's thinking settings
+
+Pi applies its own level first; a remembered level for that model then replaces it. With no remembered level, Pi's level stays in effect.
+
+| Situation | Effective thinking level |
+|-----------|--------------------------|
+| `--thinking`, `--model` (including `<pattern>:<level>`), `--provider` or `--models` at startup | Pi's, from the flags or settings (no startup restore) |
+| Resumed, continued, forked or reloaded session | The level saved in that session |
+| Unspecified interactive startup or `/new` | Remembered level, else Pi's startup level |
+| `/model` or `Ctrl+P` switch | Remembered level, else Pi's switch level |
+| RPC, print, JSON, SDK, Fabric workers | Pi's — the extension does not touch thinking |
+
+A remembered level wins over `defaultThinkingLevel`, a matching `modelThinkingLevels` entry and a `:level` suffix in `enabledModels`/`--models` scope. For example, if `modelThinkingLevels["github-copilot/gpt-6-astra"]` is `"medium"` but `pi-model-sort.json` remembers `"high"`, switching to Astra lands on `high`.
+
+| Setting | Stored in | Written by |
+|---------|-----------|------------|
+| `defaultThinkingLevel`, `modelThinkingLevels` | Pi's `settings.json` (`~/.pi/agent/` or project `.pi/`) | You, `/thinking` + `Ctrl+S`, `/settings` |
+| `thinking["provider/model"]` | `~/.pi/agent/extensions/pi-model-sort.json` | This extension, whenever a model's level changes or you leave a model |
+
+Changing the active model's level in `/settings` also updates its remembered level. To fall back to Pi's settings for a model, delete its entry from `thinking` and `/reload`; the entry is learned again from the level you leave that model on.
 
 ## Install
 
