@@ -25,15 +25,14 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { AgentSession, ModelRegistry, ModelSelectorComponent, getAgentDir } from "@earendil-works/pi-coding-agent";
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { readConfig, updateConfig, type ConfigDelta } from "./src/config-store.js";
 import { join } from "node:path";
 import {
   buildModelKey,
   CONFIG_FILENAME,
   createThinkingTracker,
   handleModelSelect,
-  type ModelSortConfig,
-  parseConfig,
+  type ThinkingLevel,
   parseModelKey,
   recordThinkingSelect,
   sortByLastUsed,
@@ -43,28 +42,6 @@ import { isInteractiveModelSession, shouldSelectMru } from "./src/session-policy
 import { installMethodPatch } from "./src/method-patch.js";
 
 const CONFIG_PATH = join(getAgentDir(), "extensions", CONFIG_FILENAME);
-
-// Config I/O
-
-function readConfig(): ModelSortConfig {
-  if (!existsSync(CONFIG_PATH)) {
-    return { lastUsed: {}, thinking: {} };
-  }
-  try {
-    const raw = readFileSync(CONFIG_PATH, "utf-8");
-    return parseConfig(JSON.parse(raw));
-  } catch {
-    return { lastUsed: {}, thinking: {} };
-  }
-}
-
-function writeConfig(config: ModelSortConfig): void {
-  const dir = join(getAgentDir(), "extensions");
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
-  }
-  writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + "\n", "utf-8");
-}
 
 // ModelSelectorComponent sortModels patch
 
@@ -357,13 +334,33 @@ function findMruModel(
 export default function (pi: ExtensionAPI) {
   let lastUsed: Record<string, number> = {};
   const tracker = createThinkingTracker();
+  const unwrittenThinking = new Map<string, ThinkingLevel>();
   let patchedRegistry: PatchedRegistry | undefined;
+
+  function persist(delta: ConfigDelta): void {
+    if (delta.lastUsed) {
+      const [key, timestamp] = delta.lastUsed;
+      lastUsed[key] = Math.max(lastUsed[key] ?? timestamp, timestamp);
+    }
+    const config = updateConfig(CONFIG_PATH, delta);
+    if (!config) {
+      if (delta.thinking) unwrittenThinking.set(...delta.thinking);
+      return;
+    }
+    if (delta.thinking) unwrittenThinking.delete(delta.thinking[0]);
+    for (const [key, timestamp] of Object.entries(config.lastUsed)) {
+      lastUsed[key] = Math.max(lastUsed[key] ?? timestamp, timestamp);
+    }
+    // Keep observations that could not be saved in this session without
+    // republishing them as part of an unrelated event.
+    tracker.thinking = { ...config.thinking, ...Object.fromEntries(unwrittenThinking) };
+  }
 
   pi.on("session_start", async (event, ctx) => {
     if (!isInteractiveModelSession(ctx.mode, process.env.PI_FABRIC_PARENT_RUN)) return;
-    const config = readConfig();
+    const config = readConfig(CONFIG_PATH);
     lastUsed = config.lastUsed;
-    tracker.thinking = config.thinking;
+    tracker.thinking = { ...config.thinking, ...Object.fromEntries(unwrittenThinking) };
     tracker.activeKey = ctx.model ? buildModelKey(ctx.model.provider, ctx.model.id) : null;
     tracker.sawSwitchClamp = false;
     tracker.inheritedLevel = false;
@@ -407,9 +404,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("thinking_level_select", (event, ctx) => {
     if (!isInteractiveModelSession(ctx.mode, process.env.PI_FABRIC_PARENT_RUN)) return;
     const currentKey = ctx.model ? buildModelKey(ctx.model.provider, ctx.model.id) : null;
-    if (recordThinkingSelect(tracker, currentKey, event.level, event.previousLevel)) {
-      writeConfig({ lastUsed, thinking: tracker.thinking });
-    }
+    recordThinkingSelect(tracker, currentKey, event.level, event.previousLevel, thinking => persist({ thinking }));
   });
 
   // Track model selections (manual, session restore).
@@ -421,15 +416,13 @@ export default function (pi: ExtensionAPI) {
   pi.on("model_select", async (event, ctx) => {
     if (!isInteractiveModelSession(ctx.mode, process.env.PI_FABRIC_PARENT_RUN)) return;
     const newKey = buildModelKey(event.model.provider, event.model.id);
-    if (event.source !== "cycle") {
-      lastUsed[newKey] = Date.now();
-    }
-
+    const usage = event.source !== "cycle" ? [newKey, Date.now()] as const : undefined;
     const previousKey = event.previousModel
       ? buildModelKey(event.previousModel.provider, event.previousModel.id)
       : null;
-    const restoreLevel = handleModelSelect(tracker, newKey, previousKey, pi.getThinkingLevel());
-    writeConfig({ lastUsed, thinking: tracker.thinking });
+    const restoreLevel = handleModelSelect(tracker, newKey, previousKey, pi.getThinkingLevel(), thinking => {
+      persist({ lastUsed: usage, thinking });
+    });
 
     // Restore the model's remembered thinking level. setThinkingLevel clamps
     // to the model's capabilities; if clamping changes the level, the

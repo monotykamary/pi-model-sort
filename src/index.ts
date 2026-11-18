@@ -8,6 +8,8 @@ export const CONFIG_FILENAME = "pi-model-sort.json";
 /** Thinking levels supported by pi. Mirrors ThinkingLevel from pi-agent-core. */
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
+export type ThinkingUpdate = readonly [key: string, level: ThinkingLevel];
+
 /** All valid thinking levels, ascending. */
 export const THINKING_LEVELS: readonly ThinkingLevel[] = [
   "off",
@@ -140,10 +142,13 @@ export function createThinkingTracker(): ThinkingTrackerState {
   return { thinking: {}, activeKey: null, sawSwitchClamp: false, inheritedLevel: false };
 }
 
-function recordLevel(state: ThinkingTrackerState, key: string, level: ThinkingLevel): boolean {
-  if (state.thinking[key] === level) return false;
+function recordLevel(state: ThinkingTrackerState, key: string, level: ThinkingLevel, onRecord?: (update: ThinkingUpdate) => void): boolean {
+  const changed = state.thinking[key] !== level;
   state.thinking[key] = level;
-  return true;
+  // The local cache can disagree with disk. An actual observation is a delta
+  // even if it matches the level this process already knew.
+  onRecord?.([key, level]);
+  return changed;
 }
 
 /**
@@ -155,15 +160,16 @@ export function recordThinkingSelect(
   currentKey: string | null,
   level: ThinkingLevel,
   previousLevel: ThinkingLevel,
+  onRecord?: (update: ThinkingUpdate) => void,
 ): boolean {
   if (currentKey !== null && state.activeKey !== null && currentKey !== state.activeKey) {
     state.sawSwitchClamp = true;
-    return state.inheritedLevel ? false : recordLevel(state, state.activeKey, previousLevel);
+    return state.inheritedLevel ? false : recordLevel(state, state.activeKey, previousLevel, onRecord);
   }
   const key = currentKey ?? state.activeKey;
   if (key === null) return false;
   state.inheritedLevel = false;
-  return recordLevel(state, key, level);
+  return recordLevel(state, key, level, onRecord);
 }
 
 /**
@@ -180,17 +186,22 @@ export function handleModelSelect(
   newKey: string,
   previousKey: string | null,
   currentLevel: ThinkingLevel,
+  beforeRestore?: (outgoing: ThinkingUpdate | undefined) => void,
 ): ThinkingLevel | null {
   // No re-clamp during the switch means the level carried over unchanged, so
   // currentLevel is also the previous model's final level. When a re-clamp did
   // fire, recordThinkingSelect already stored the previous model's level.
+  let outgoing: ThinkingUpdate | undefined;
   if (previousKey !== null && !state.sawSwitchClamp && !state.inheritedLevel) {
     recordLevel(state, previousKey, currentLevel);
+    outgoing = [previousKey, currentLevel];
   }
   state.sawSwitchClamp = false;
   state.inheritedLevel = false;
   state.activeKey = newKey;
 
+  // Callers can merge fresher shared memory before looking up the new model.
+  beforeRestore?.(outgoing);
   const remembered = state.thinking[newKey];
   if (remembered === undefined || remembered === currentLevel) return null;
   return remembered;

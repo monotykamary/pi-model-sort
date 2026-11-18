@@ -21,7 +21,7 @@ Pi's `/model` selector sorts models alphabetically by provider. If you have Anth
 
 `pi-model-sort` tracks every model selection and reorders the `/model` picker so your most recently used models appear at the top.
 
-- **Automatic tracking** — every `/model` switch, `Ctrl+P` cycle, and session restore is recorded with a Unix timestamp
+- **Automatic tracking** — `/model` switches and session restores are recorded with a Unix timestamp; `Ctrl+P` cycles use that order without changing it
 - **Sort order** — current model first → most recently used descending → provider/id alphabetical fallback
 - **MRU on interactive startup** — unspecified TUI sessions start on your most recently used authenticated model within the configured scope. Explicit model/provider/scope/thinking and restored-session selections always win.
 - **Per-model thinking levels** — remembers the thinking level you last used on each model and restores it on every switch (`/model`, `Ctrl+P`) and on unspecified interactive startup, clamped to what each model supports
@@ -52,7 +52,7 @@ RPC, print, JSON, SDK/non-TUI sessions, and Fabric workers do not apply MRU mode
 
 ### Config File
 
-The extension creates `~/.pi/agent/extensions/pi-model-sort.json` automatically on first model switch:
+The extension creates `~/.pi/agent/extensions/pi-model-sort.json` automatically on the first tracked model or thinking change:
 
 ```json
 {
@@ -69,6 +69,8 @@ The extension creates `~/.pi/agent/extensions/pi-model-sort.json` automatically 
 ```
 
 No manual editing needed. To clear usage history, delete the file and `/reload`.
+
+Updates from concurrent Pi sessions are merged on disk. If the file is corrupt, storage is unwritable, or the write lock stays busy, the extension keeps sorting and remembering thinking levels in memory for the current session without replacing the file. A process killed during a write may leave a `pi-model-sort.json.lock` directory next to the config (or its symlink target). Remove that directory only after stopping all Pi sessions that use the file.
 
 ### Per-Model Thinking Levels
 
